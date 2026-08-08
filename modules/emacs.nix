@@ -60,8 +60,9 @@ in
     startWithGraphical = true;
   };
 
-  environment.variables = {
-    EDITOR = "emacsclient -c -a 'emacs'";
-    VISUAL = "emacsclient -c -a 'emacs'";
-  };
+  # services.emacs.defaultEditor already sets EDITOR to nixpkgs' `emacseditor`
+  # wrapper, which is emacsclient with a fallback to a fresh Emacs. Setting
+  # EDITOR here as well is a hard conflict, so only VISUAL is declared, and
+  # with mkDefault so anything more specific still wins.
+  environment.variables.VISUAL = lib.mkDefault "emacseditor";
 }
