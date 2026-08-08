@@ -44,7 +44,6 @@ in
         "waybar"
         "mako"
         "hypridle"
-        "hyprpaper"
         "swayosd-server"
         "wl-paste --watch cliphist store"
       ];

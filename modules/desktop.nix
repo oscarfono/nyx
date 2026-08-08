@@ -19,7 +19,8 @@
   services.greetd = {
     enable = true;
     settings.default_session = {
-      command = "${pkgs.greetd.tuigreet}/bin/tuigreet --time --remember --cmd 'uwsm start hyprland-uwsm.desktop'";
+      # tuigreet is a top-level package now, not an attribute of greetd.
+      command = "${lib.getExe pkgs.tuigreet} --time --remember --cmd 'uwsm start hyprland-uwsm.desktop'";
       user = "greeter";
     };
   };
