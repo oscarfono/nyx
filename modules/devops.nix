@@ -59,7 +59,7 @@
     tcpdump
     wireshark
     mtr
-    dogdns
+    doggo
     bandwhich
     termshark
 
