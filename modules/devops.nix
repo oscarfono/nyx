@@ -1,4 +1,4 @@
-{ config, pkgs, lib, ... }:
+{ config, pkgs, lib, inputs, ... }:
 
 # The part that earns the "devops/secops dream setup" description.
 
@@ -115,6 +115,13 @@
     auto-optimise-store = true;
     trusted-users = [ "root" "@wheel" ];
   };
+  # Pin `nix shell nixpkgs#foo`, `nix repl '<nixpkgs>'` and friends to the
+  # exact nixpkgs this system was built from. Without this, ad-hoc commands
+  # silently use a different, unpinned nixpkgs than the system, which is the
+  # sort of drift this whole project exists to avoid.
+  nix.registry.nixpkgs.flake = inputs.nixpkgs;
+  nix.nixPath = [ "nixpkgs=${inputs.nixpkgs}" ];
+
   nix.gc = {
     automatic = true;
     dates = "weekly";

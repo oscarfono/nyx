@@ -12,17 +12,17 @@
   programs.home-manager.enable = true;
 
   # -------------------------------------------------------------------
-  # Secrets directory
+  # Directories
   # -------------------------------------------------------------------
-  # ~/.shh holds .authinfo.gpg, referenced by early-init.el. Created at
-  # activation with 0700 so only the owner can read, write or traverse it.
-  # home.file cannot express an empty directory with a mode, so this is one
-  # of the few places an activation script is the right tool.
-  home.activation.createShhDir =
-    config.lib.dag.entryAfter [ "writeBoundary" ] ''
-      $DRY_RUN_CMD mkdir -p "$HOME/.shh"
-      $DRY_RUN_CMD chmod 0700 "$HOME/.shh"
-    '';
+  # systemd-tmpfiles, not an activation script. Declarative, runs on a
+  # timer as well as at boot, and cannot take the rest of activation down
+  # with it if it fails.
+  #   ~/.shh    secrets, referenced by early-init.el. Owner-only.
+  #   ~/Videos  target for the screen-recording bind.
+  systemd.user.tmpfiles.rules = [
+    "d %h/.shh 0700 - - -"
+    "d %h/Videos 0755 - - -"
+  ];
 
   # -------------------------------------------------------------------
   # Shell

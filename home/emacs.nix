@@ -59,4 +59,12 @@ in
 
     Install.WantedBy = [ "default.target" ];
   };
+
+  # The Emacs daemon starts at graphical login. On a fresh machine that can
+  # be before the bootstrap above has finished cloning, which gives you a
+  # daemon running with no config until the next restart. Order it.
+  systemd.user.services.emacs = {
+    Unit.After = [ "nyx-emacs-bootstrap.service" ];
+    Unit.Wants = [ "nyx-emacs-bootstrap.service" ];
+  };
 }
