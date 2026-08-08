@@ -66,8 +66,13 @@
     # Security scanning
     lynis
     clamav
-    rkhunter
     gitleaks
+    # rkhunter is not packaged in nixpkgs, and it would be near-useless here
+    # anyway: it checks for modified system binaries, and on NixOS the store
+    # is read-only and every path is hash-verified. vulnix is the Nix-native
+    # equivalent and actually tells you something useful: it audits the store
+    # against known CVEs.
+    vulnix
 
     # Shell quality of life
     ripgrep
