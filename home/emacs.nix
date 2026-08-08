@@ -1,55 +1,62 @@
 { config, pkgs, lib, ... }:
 
-# Emacs, user side. Add to home/default.nix.
+# Emacs, user side. Add to home/default.nix (already imported).
 #
-# Your repo already ships early-init.el, so Nix does NOT write one. It only
-# does two things here: clone the config if absent, and seed straight.el at a
-# pinned revision so the bootstrap block in your early-init.el never has to
-# fetch and eval install.el over the network.
+# straight.el needs ~/.emacs.d to be WRITABLE: it clones into
+# straight/repos and byte-compiles into straight/build. That rules out a Nix
+# store symlink, so the config repo stays a normal git clone and Nix stays
+# out of its way.
+#
+# Reproducibility does not disappear, it moves: commit
+# ~/.emacs.d/straight/versions/default.el to your config repo. That plus
+# straight-thaw-versions is straight's flake.lock. Freeze with
+# M-x straight-freeze-versions before rebuilding a machine.
+#
+# IMPORTANT: the bootstrap below is a user SERVICE, not an activation script.
+# Activation runs during home-manager-<user>.service, which starts before the
+# network is up, and a failed clone there aborts the ENTIRE activation, so no
+# Hyprland config, no shell, nothing. Ask me how I know. As a service it
+# waits for the network and fails harmlessly on its own if it cannot reach
+# GitHub.
 
 let
-  # Pin this. Bump it deliberately, the way you would bump flake.lock.
   straightRev = "2f3ff3d2f3e5b1eb5b13d0b6a1e2fcdb37c26e0e";  # REPLACE with a real commit
 in
 {
-  # 1. Clone the config if it is not there. Idempotent.
-  home.activation.cloneEmacsConfig =
-    config.lib.dag.entryAfter [ "writeBoundary" ] ''
-      if [ ! -d "$HOME/.emacs.d/.git" ]; then
-        $DRY_RUN_CMD ${pkgs.git}/bin/git clone \
-          https://github.com/oscarfono/.emacs.d.git "$HOME/.emacs.d"
-      fi
-    '';
+  systemd.user.services.nyx-emacs-bootstrap = {
+    Unit = {
+      Description = "Clone .emacs.d and seed straight.el";
+      After = [ "network-online.target" ];
+      Wants = [ "network-online.target" ];
+    };
 
-  # 2. Seed straight.el itself at a pinned revision.
-  #
-  # Your early-init.el currently does this instead:
-  #
-  #   (url-retrieve-synchronously ".../develop/install.el") -> eval-print-last-sexp
-  #
-  # That fetches whatever is on the develop branch at that moment and evaluates
-  # it. It is the elisp equivalent of curl | bash, and it is the single largest
-  # piece of unpinned remote code execution left in the build. Seeding the repo
-  # here means bootstrap-file already exists, so that branch of your `unless`
-  # never runs, and you did not have to edit early-init.el at all.
-  #
-  # This clones a real git repo rather than copying from the Nix store, because
-  # straight manages itself with git and straight-freeze-versions needs .git to
-  # be present.
-  home.activation.seedStraight =
-    config.lib.dag.entryAfter [ "cloneEmacsConfig" ] ''
-      STRAIGHT_REPO="$HOME/.emacs.d/straight/repos/straight.el"
-      if [ ! -d "$STRAIGHT_REPO/.git" ]; then
-        $DRY_RUN_CMD ${pkgs.git}/bin/git clone \
-          https://github.com/radian-software/straight.el "$STRAIGHT_REPO"
-        $DRY_RUN_CMD ${pkgs.git}/bin/git -C "$STRAIGHT_REPO" checkout ${straightRev}
-      fi
-    '';
+    Service = {
+      Type = "oneshot";
+      RemainAfterExit = true;
+      ExecStart = toString (pkgs.writeShellScript "nyx-emacs-bootstrap" ''
+        set -u
+        GIT=${pkgs.git}/bin/git
 
-  # 3. Reproducibility for elisp lives in straight's lockfile, not in Nix.
-  #    Commit ~/.emacs.d/straight/versions/default.el to your config repo.
-  #    M-x straight-freeze-versions before rebuilding a machine,
-  #    M-x straight-thaw-versions on the new one.
-  #    Without that file, a fresh T490s gets today's HEAD of every package,
-  #    which is not the same config you are running now.
+        if [ ! -d "$HOME/.emacs.d/.git" ]; then
+          $GIT clone https://github.com/oscarfono/.emacs.d.git "$HOME/.emacs.d" \
+            || echo "nyx: .emacs.d clone failed, will retry next boot" >&2
+        fi
+
+        # Seed straight.el at a pinned revision so the url-retrieve of
+        # install.el in your early-init.el never runs. That block is the
+        # elisp equivalent of curl | bash and this removes it without you
+        # having to edit early-init.el at all.
+        STRAIGHT_REPO="$HOME/.emacs.d/straight/repos/straight.el"
+        if [ -d "$HOME/.emacs.d" ] && [ ! -d "$STRAIGHT_REPO/.git" ]; then
+          $GIT clone https://github.com/radian-software/straight.el "$STRAIGHT_REPO" \
+            && $GIT -C "$STRAIGHT_REPO" checkout ${straightRev} \
+            || echo "nyx: straight.el seed failed, early-init will bootstrap it" >&2
+        fi
+
+        exit 0
+      '');
+    };
+
+    Install.WantedBy = [ "default.target" ];
+  };
 }

@@ -66,6 +66,11 @@
     users.users.coops.password = "nyx";
     users.users.root.password = "nyx";
 
+    # If home-manager fails, none of our config applies and you fall back to
+    # Hyprland's built-in defaults, whose only terminal bind is SUPER+Q ->
+    # kitty. Ship kitty in the VM so there is always a way in to read logs.
+    environment.systemPackages = [ pkgs.kitty ];
+
     virtualisation = {
       memorySize = 4096;
       cores = 4;

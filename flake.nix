@@ -46,6 +46,10 @@
           {
             home-manager.useGlobalPkgs = true;
             home-manager.useUserPackages = true;
+            # Move pre-existing files aside instead of aborting activation.
+            # Without this, one stray file (a default hyprland.lua, say)
+            # blocks the entire user config from applying.
+            home-manager.backupFileExtension = "hm-bak";
             home-manager.extraSpecialArgs = { inherit inputs; };
             home-manager.users.coops = import ./home;
           }
