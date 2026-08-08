@@ -12,10 +12,14 @@ in
   # -------------------------------------------------------------------
   wayland.windowManager.hyprland = {
     enable = true;
+    # NOTE: no "$mod" / "$terminal" variables here.
+    #
+    # home-manager now emits hyprland.lua, and Lua has no way to express an
+    # attribute named `$mod`, so those keys produce a syntax error and
+    # Hyprland drops into emergency mode with no binds at all. Modifiers and
+    # commands are written out literally instead. Slightly more verbose,
+    # entirely valid.
     settings = {
-      "$mod" = "SUPER";
-      "$terminal" = "ghostty";
-
       monitor = ",preferred,auto,1.25";   # 14in 1080p, 1.25 is comfortable
 
       general = {
@@ -49,28 +53,28 @@ in
       ];
 
       bind = [
-        "$mod, Return, exec, $terminal"
-        "$mod, E, exec, emacsclient -c -a ''"
-        "$mod, B, exec, brave"
-        "$mod SHIFT, B, exec, firefox"
-        "$mod, P, exec, keepassxc"
-        "$mod, Space, exec, fuzzel"
-        "$mod, Q, killactive,"
-        "$mod, F, fullscreen,"
-        "$mod, V, togglefloating,"
-        "$mod SHIFT, L, exec, hyprlock"
-        "$mod, K, exec, ghostty -e 'less ~/.config/nyx/keybinds.txt'"
-        "$mod ALT, Space, exec, nyx-menu-root"
+        "SUPER, Return, exec, ghostty"
+        "SUPER, E, exec, emacsclient -c -a ''"
+        "SUPER, B, exec, brave"
+        "SUPER SHIFT, B, exec, firefox"
+        "SUPER, P, exec, keepassxc"
+        "SUPER, Space, exec, fuzzel"
+        "SUPER, Q, killactive,"
+        "SUPER, F, fullscreen,"
+        "SUPER, V, togglefloating,"
+        "SUPER SHIFT, L, exec, hyprlock"
+        "SUPER, K, exec, ghostty -e 'less ~/.config/nyx/keybinds.txt'"
+        "SUPER ALT, Space, exec, nyx-menu-root"
 
         # Capture, the Omarchy pattern: region to clipboard, region to editor
         ", Print, exec, grim -g \"$(slurp)\" - | wl-copy"
         "SHIFT, Print, exec, grim -g \"$(slurp)\" - | satty -f -"
-        "$mod SHIFT, R, exec, wf-recorder -g \"$(slurp)\" -f ~/Videos/rec-$(date +%s).mp4"
+        "SUPER SHIFT, R, exec, wf-recorder -g \"$(slurp)\" -f ~/Videos/rec-$(date +%s).mp4"
       ]
       ++ builtins.concatLists (builtins.genList
         (i: let ws = toString (i + 1); in [
-          "$mod, ${ws}, workspace, ${ws}"
-          "$mod SHIFT, ${ws}, movetoworkspace, ${ws}"
+          "SUPER, ${ws}, workspace, ${ws}"
+          "SUPER SHIFT, ${ws}, movetoworkspace, ${ws}"
         ]) 9);
 
       bindel = [
