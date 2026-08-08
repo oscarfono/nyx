@@ -4,6 +4,9 @@
 # Emacs lives in modules/emacs.nix, not here.
 
 {
+  # Unfree is opt-in per package, never blanket-enabled. Anything added here
+  # is a deliberate decision, and the list doubles as documentation of every
+  # non-free thing on the system.
   nixpkgs.config.allowUnfreePredicate = pkg:
     builtins.elem (lib.getName pkg) [
       "brave"

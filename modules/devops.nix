@@ -28,7 +28,10 @@
     pre-commit
 
     # Infra
-    terraform
+    # No terraform: BSL 1.1 since HashiCorp's relicence. opentofu is the
+    # MPL-licenced fork and a drop-in replacement, so `tofu` is the command.
+    # If a workplace ever mandates terraform proper, add it here and to the
+    # allowUnfreePredicate list in apps.nix.
     ansible
     kubectl
     kubernetes-helm

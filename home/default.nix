@@ -36,6 +36,7 @@
       ls = "eza --icons --group-directories-first";
       ll = "eza -l --icons --group-directories-first --git";
       cat = "bat";
+      terraform = "tofu";   # muscle memory, minus the licence
       rebuild = "sudo nixos-rebuild switch --flake ~/nyx#beta";
       update = "nix flake update --flake ~/nyx";
     };
