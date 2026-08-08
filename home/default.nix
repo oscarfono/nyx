@@ -57,11 +57,16 @@
   # -------------------------------------------------------------------
   programs.git = {
     enable = true;
-    userName = "Cooper Oscarfono";
-    userEmail = "cooper@oscarfono.com";
     signing.signByDefault = true;
     # signing.key = "YOUR-GPG-KEY-ID";
-    extraConfig = {
+
+    # home-manager moved git config under `settings` upstream. userName,
+    # userEmail and extraConfig are all folded in here now.
+    settings = {
+      user = {
+        name = "Cooper Oscarfono";
+        email = "cooper@oscarfono.com";
+      };
       init.defaultBranch = "main";
       pull.rebase = true;
       push.autoSetupRemote = true;

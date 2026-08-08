@@ -108,11 +108,15 @@
     dns = "systemd-resolved";
   };
 
+  # resolved options moved under `settings.Resolve`, matching
+  # resolved.conf's own key names.
   services.resolved = {
     enable = true;
-    dnssec = "true";
-    dnsovertls = "true";
-    fallbackDns = [ "9.9.9.9#dns.quad9.net" "149.112.112.112#dns.quad9.net" ];
+    settings.Resolve = {
+      DNSSEC = "true";
+      DNSOverTLS = "true";
+      FallbackDNS = [ "9.9.9.9#dns.quad9.net" "149.112.112.112#dns.quad9.net" ];
+    };
   };
   # Quad9, not 8.8.8.8. No Google, including at layer 7.
 

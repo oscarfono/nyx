@@ -21,14 +21,16 @@
   # Suspend on lid close, hibernate if it stays shut for a long time.
   # Requires a swap device at least as large as RAM, so this is commented
   # until you have decided on swap. Plain suspend works without it.
-  services.logind = {
-    lidSwitch = "suspend";
-    lidSwitchExternalPower = "suspend";
-    lidSwitchDocked = "ignore";
-    powerKey = "suspend";
+  # logind options moved under `settings.Login` to match systemd's own
+  # config keys.
+  services.logind.settings.Login = {
+    HandleLidSwitch = "suspend";
+    HandleLidSwitchExternalPower = "suspend";
+    HandleLidSwitchDocked = "ignore";
+    HandlePowerKey = "suspend";
   };
   # systemd.sleep.extraConfig = "HibernateDelaySec=2h";
-  # services.logind.lidSwitch = "suspend-then-hibernate";
+  # services.logind.settings.Login.HandleLidSwitch = "suspend-then-hibernate";
 
   # ---------------------------------------------------------------------
   # Battery
