@@ -70,7 +70,11 @@
       memorySize = 4096;
       cores = 4;
       resolution = { x = 1600; y = 900; };
-      qemu.options = [ "-vga none" "-device virtio-vga-gl" "-display gtk,gl=on" ];
+      # No custom -display or virtio-vga-gl here. Host-side GL passthrough
+      # needs a GTK context with DMABUF, which a Wayland session does not
+      # reliably provide, and qemu aborts rather than falling back. The
+      # default display works; software rendering makes Hyprland sluggish in
+      # the VM but that says nothing about performance on real hardware.
     };
   };
 
