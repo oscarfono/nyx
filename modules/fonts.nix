@@ -17,7 +17,7 @@
       google-fonts          # carries Caveat. Large. Swap for a narrower
                             # package if closure size starts to annoy you.
       noto-fonts
-      noto-fonts-emoji
+      noto-fonts-color-emoji
       liberation_ttf
     ];
 
