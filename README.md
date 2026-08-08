@@ -15,6 +15,7 @@ Target: Lenovo ThinkPad T490s (hostname `beta`).
 ```
 flake.nix              inputs, the `beta` host output
 lib/melancholy.nix     the palette. Single source of colour truth.
+lib/menu.nix           the menu tree as data, rendered into scripts at build
 modules/desktop.nix    Hyprland, greetd, audio, portals, capture tools
 modules/apps.nix       Brave, Firefox, KeePassXC, Claude Code
 modules/emacs.nix      Emacs + straight.el toolchain
@@ -22,7 +23,7 @@ modules/devops.nix     containers, k8s, IaC, secrets, network tooling
 modules/security.nix   hardening, DNS, firewall, audit, Secure Boot (opt-in)
 modules/power.nix      T490s power, battery, suspend
 modules/fonts.nix      CommitMono, Raleway, Caveat
-home/                  user layer: desktop theming, shell, git, Emacs
+home/                  user layer: desktop theming, menus, shell, git, Emacs
 hosts/t490s/           hardware profile and host settings
 ```
 

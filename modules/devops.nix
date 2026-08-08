@@ -14,7 +14,8 @@
   virtualisation.libvirtd = {
     enable = true;
     qemu.swtpm.enable = true;
-    qemu.ovmf.enable = true;
+    # qemu.ovmf was removed upstream: all OVMF images shipped with QEMU are
+    # now available by default. Nothing to declare.
   };
   programs.virt-manager.enable = true;
 

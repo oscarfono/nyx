@@ -88,8 +88,14 @@
   #   nix run nixpkgs#pam_u2f -- ... (see README)
   # security.pam.u2f.enable = true;
 
-  users.mutableUsers = false;   # users declared in Nix, not adduser
-  # Set with: mkpasswd -m yescrypt, then store via sops.
+  # STAGED. Declarative users are the goal, but mutableUsers = false with no
+  # declared password means no way in. Sequence:
+  #   1. Install with mutableUsers = true (below), set a password with passwd.
+  #   2. Get sops working, put a yescrypt hash in secrets.yaml
+  #      (generate with: mkpasswd -m yescrypt).
+  #   3. Uncomment hashedPasswordFile, flip mutableUsers to false, rebuild.
+  #      Do NOT reboot until you have confirmed you can still su to the user.
+  users.mutableUsers = true;
   # users.users.coops.hashedPasswordFile = config.sops.secrets.coops-password.path;
 
   # ---------------------------------------------------------------------

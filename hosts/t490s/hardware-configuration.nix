@@ -1,15 +1,12 @@
-# PLACEHOLDER.
+# PLACEHOLDER — replace on the target machine with:
 #
-# Replace this entire file with the output of, on the target machine:
+#     sudo nixos-generate-config --show-hardware-config > hosts/t490s/hardware-configuration.nix
 #
-#     sudo nixos-generate-config --show-hardware-config > hardware-configuration.nix
-#
-# Do not hand-write UUIDs. The generated file is the one piece of this repo
-# that is legitimately machine-specific.
-#
-# If you are encrypting the root filesystem, the generated file will already
-# contain the boot.initrd.luks.devices entry. Leave it alone, and see
-# modules/security.nix for the TPM2 enrolment steps that go alongside it.
+# The filesystem entries below are stubs that match the labels used in the
+# install steps (nixos, BOOT), purely so `nix flake check` can evaluate on a
+# machine that is not the target. They are NOT your real disk layout. The
+# generated file will carry the correct UUIDs and, if you encrypted the root,
+# the boot.initrd.luks.devices entry as well.
 
 { config, lib, pkgs, modulesPath, ... }:
 
@@ -19,8 +16,18 @@
   boot.initrd.availableKernelModules = [ "xhci_pci" "nvme" "usb_storage" "sd_mod" ];
   boot.kernelModules = [ "kvm-intel" ];
 
-  # fileSystems."/" = { device = "/dev/disk/by-uuid/REPLACE-ME"; fsType = "ext4"; };
-  # fileSystems."/boot" = { device = "/dev/disk/by-uuid/REPLACE-ME"; fsType = "vfat"; };
+  fileSystems."/" = {
+    device = "/dev/disk/by-label/nixos";
+    fsType = "ext4";
+  };
+
+  fileSystems."/boot" = {
+    device = "/dev/disk/by-label/BOOT";
+    fsType = "vfat";
+    options = [ "fmask=0077" "dmask=0077" ];
+  };
+
+  swapDevices = [ ];
 
   nixpkgs.hostPlatform = lib.mkDefault "x86_64-linux";
   hardware.cpu.intel.updateMicrocode = lib.mkDefault config.hardware.enableRedistributableFirmware;

@@ -61,6 +61,7 @@ in
         "$mod, V, togglefloating,"
         "$mod SHIFT, L, exec, hyprlock"
         "$mod, K, exec, ghostty -e 'less ~/.config/nyx/keybinds.txt'"
+        "$mod ALT, Space, exec, nyx-menu-root"
 
         # Capture, the Omarchy pattern: region to clipboard, region to editor
         ", Print, exec, grim -g \"$(slurp)\" - | wl-copy"
