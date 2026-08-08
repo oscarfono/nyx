@@ -16,6 +16,7 @@ Target: Lenovo ThinkPad T490s (hostname `beta`).
 flake.nix              inputs, the `beta` host output
 lib/melancholy.nix     the palette. Single source of colour truth.
 lib/menu.nix           the menu tree as data, rendered into scripts at build
+assets/wallpapers/     melancholy wallpapers, shipped in the repo
 modules/desktop.nix    Hyprland, greetd, audio, portals, capture tools
 modules/apps.nix       Brave, Firefox, KeePassXC, Claude Code
 modules/emacs.nix      Emacs + straight.el toolchain
