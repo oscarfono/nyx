@@ -41,9 +41,13 @@ let
 
     case "''${1:-next}" in
       next)
+        # `A || B && C` in POSIX sh does not mean what it looks like, so the
+        # selection is written out explicitly.
         cur=$(cat "$CURRENT" 2>/dev/null || true)
-        next=$(list | grep -A1 -x -F "$cur" | tail -1 || true)
-        [ -z "$next" ] || [ "$next" = "$cur" ] && next=$(list | head -1)
+        next=$(list | grep -A1 -x -F "$cur" 2>/dev/null | tail -1 || true)
+        if [ -z "$next" ] || [ "$next" = "$cur" ]; then
+          next=$(list | head -1)
+        fi
         apply "$next"
         ;;
       pick)

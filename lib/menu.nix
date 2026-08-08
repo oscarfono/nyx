@@ -44,8 +44,6 @@
       "  Audio"        = { exec = "pavucontrol"; };
       "󰍹  Displays"     = { exec = "ghostty -e wlr-randr"; };
       "  Battery"      = { exec = "ghostty -e sh -c 'acpi -V; read -n1'"; };
-      "󰚰  Rebuild"      = { exec = "ghostty -e sh -c 'sudo nixos-rebuild switch --flake $HOME/Projects/nyx#beta; read -n1'"; };
-      "󰋼  Generations"  = { exec = "ghostty -e sh -c 'nixos-rebuild list-generations; read -n1'"; };
     };
   };
 
@@ -56,6 +54,20 @@
       "󰜉  Reboot"    = { exec = "systemctl reboot"; };
       "󰐥  Shutdown"  = { exec = "systemctl poweroff"; };
       "󰍃  Log out"   = { exec = "uwsm stop"; };
+    };
+  };
+
+  "󰆧  Nix" = {
+    submenu = {
+      "󰏗  Search packages" = { exec = "ghostty -e sh -c 'read -p \"search: \" q; nix search nixpkgs \"$q\" | less'"; };
+      "󰐊  Try a package"    = { exec = "ghostty -e sh -c 'read -p \"package: \" p; nix shell nixpkgs#\"$p\"'"; };
+      "  Edit config"      = { exec = "emacsclient -c -a '' $HOME/Projects/nyx"; };
+      "󰚰  Rebuild"          = { exec = "ghostty -e sh -c 'sudo nixos-rebuild switch --flake $HOME/Projects/nyx#beta; read -n1'"; };
+      "󰕌  Rollback"         = { exec = "ghostty -e sh -c 'sudo nixos-rebuild switch --rollback; read -n1'"; };
+      "󰋼  Generations"      = { exec = "ghostty -e sh -c 'nixos-rebuild list-generations; read -n1'"; };
+      "󰓦  Update inputs"    = { exec = "ghostty -e sh -c 'cd $HOME/Projects/nyx && nix flake update; read -n1'"; };
+      "󰩹  Garbage collect"  = { exec = "ghostty -e sh -c 'sudo nix-collect-garbage -d; read -n1'"; };
+      "󰒃  CVE scan (vulnix)" = { exec = "ghostty -e sh -c 'vulnix --system | less'"; };
     };
   };
 

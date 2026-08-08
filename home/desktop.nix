@@ -25,7 +25,7 @@ let
     "SUPER, P, exec, keepassxc"
     "SUPER, Space, exec, fuzzel"
     "SUPER ALT, Space, exec, nyx-menu-root"
-    "SUPER, K, exec, ghostty -e less /home/coops/.config/nyx/keybinds.txt"
+    "SUPER, K, exec, ghostty -e less ${config.xdg.configHome}/nyx/keybinds.txt"
     "SUPER, Q, killactive,"
     "SUPER, F, fullscreen,"
     "SUPER, V, togglefloating,"

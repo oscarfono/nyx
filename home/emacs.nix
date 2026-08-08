@@ -20,7 +20,7 @@
 # GitHub.
 
 let
-  straightRev = "2f3ff3d2f3e5b1eb5b13d0b6a1e2fcdb37c26e0e";  # REPLACE with a real commit
+  straightRev = "adb0fb37bc5fc298f5ed9f61447cfe379fff77ed";  # develop @ 2026-08-08
 in
 {
   systemd.user.services.nyx-emacs-bootstrap = {
