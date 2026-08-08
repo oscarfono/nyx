@@ -45,8 +45,13 @@ in
     pkgs.sqlite
     pkgs.texliveSmall    # org to PDF
     pkgs.aspell
+    # aspell has no en_AU dictionary; en carries the British/Australian
+    # variants. Set them per-buffer with:
+    #   (setq ispell-dictionary "en_AU")
+    # after ispell-program-name is aspell, or use hunspell if you want a
+    # dedicated en_AU. aspellDicts.en-computers is handy for code buffers.
     pkgs.aspellDicts.en
-    pkgs.aspellDicts.en_AU
+    pkgs.aspellDicts.en-computers
 
     # early-init.el sets auth-sources to a .gpg file, so gpg must be present
     # before the first frame. pinentry is configured in modules/devops.nix.
