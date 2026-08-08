@@ -62,7 +62,7 @@
       "󰏗  Search packages" = { exec = "ghostty -e sh -c 'read -p \"search: \" q; nix search nixpkgs \"$q\" | less'"; };
       "󰐊  Try a package"    = { exec = "ghostty -e sh -c 'read -p \"package: \" p; nix shell nixpkgs#\"$p\"'"; };
       "  Edit config"      = { exec = "emacsclient -c -a '' $HOME/Projects/nyx"; };
-      "󰚰  Rebuild"          = { exec = "ghostty -e sh -c 'sudo nixos-rebuild switch --flake $HOME/Projects/nyx#beta; read -n1'"; };
+      "󰚰  Rebuild"          = { exec = "ghostty -e sh -c 'sudo nixos-rebuild switch --flake $HOME/Projects/nyx#$(hostname); read -n1'"; };
       "󰕌  Rollback"         = { exec = "ghostty -e sh -c 'sudo nixos-rebuild switch --rollback; read -n1'"; };
       "󰋼  Generations"      = { exec = "ghostty -e sh -c 'nixos-rebuild list-generations; read -n1'"; };
       "󰓦  Update inputs"    = { exec = "ghostty -e sh -c 'cd $HOME/Projects/nyx && nix flake update; read -n1'"; };

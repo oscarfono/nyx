@@ -1,12 +1,12 @@
-{ config, pkgs, lib, ... }:
+{ config, pkgs, lib, username, fullName, email, hostName, ... }:
 
 # User layer. Everything here is Nyx's own.
 
 {
   imports = [ ./emacs.nix ./desktop.nix ./menu.nix ./wallpaper.nix ];
 
-  home.username = "coops";
-  home.homeDirectory = "/home/coops";
+  home.username = username;
+  home.homeDirectory = "/home/${username}";
   home.stateVersion = "26.05";
 
   programs.home-manager.enable = true;
@@ -37,8 +37,8 @@
       ll = "eza -l --icons --group-directories-first --git";
       cat = "bat";
       terraform = "tofu";   # muscle memory, minus the licence
-      rebuild = "sudo nixos-rebuild switch --flake ~/nyx#beta";
-      update = "nix flake update --flake ~/nyx";
+      rebuild = "sudo nixos-rebuild switch --flake ~/Projects/nyx#${hostName}";
+      update = "nix flake update --flake ~/Projects/nyx";
     };
   };
   programs.starship.enable = true;
@@ -65,8 +65,8 @@
     # userEmail and extraConfig are all folded in here now.
     settings = {
       user = {
-        name = "Cooper Oscarfono";
-        email = "cooper@oscarfono.com";
+        name = fullName;
+        email = email;
       };
       init.defaultBranch = "main";
       pull.rebase = true;

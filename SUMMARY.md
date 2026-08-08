@@ -32,6 +32,16 @@ Repo: `github.com/oscarfono/nyx` (public). Working copy: `~/Projects/nyx`.
 | opentofu, not terraform | Terraform is BSL 1.1 (unfree). `tofu` is a drop-in; a `terraform=tofu` alias covers muscle memory. |
 | Unfree allow-listed per package | Only `brave` and `claude-code`. The list doubles as an inventory. |
 
+## Multiple machines
+
+`flake.nix` defines `mkHost`, so a new machine is an entry in
+`nixosConfigurations`, not a fork. Everything machine-specific is an
+argument: `hostName`, `username`, `hardware` (a nixos-hardware module or
+`null`), `hostPath`, and which of our modules it wants. A headless box drops
+`desktop.nix` and `fonts.nix` and keeps `security.nix` and `devops.nix`.
+The username is threaded through to home-manager, so the repo is not welded
+to one account name — `beta` uses `coops`; another host can use `sod`.
+
 ## Layout
 
 ```
@@ -104,7 +114,7 @@ render. Not yet installed on hardware.
 
 ## Known gaps / next actions
 
-- [ ] **Username is `coops`.** Confirm before installing, or I get `/home/coops`.
+- [x] Username is a `mkHost` argument. `beta` uses `coops`; other hosts can differ.
 - [ ] `hosts/t490s/hardware-configuration.nix` is a stub with label-based
       filesystem entries so evaluation works off-target. Regenerate on the
       real machine with `nixos-generate-config`.

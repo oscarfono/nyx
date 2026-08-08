@@ -1,4 +1,4 @@
-{ config, pkgs, lib, ... }:
+{ config, pkgs, lib, username, ... }:
 
 {
   imports = [
@@ -12,7 +12,6 @@
     ../../modules/security.nix
   ];
 
-  networking.hostName = "beta";
 
   # systemd-boot for now. Swap to lanzaboote once you have enrolled your own
   # Secure Boot keys, see modules/security.nix.
@@ -44,9 +43,9 @@
     };
   };
 
-  users.users.coops = {
+  users.users.${username} = {
     isNormalUser = true;
-    description = "Coops";
+    description = username;
     extraGroups = [ "wheel" "networkmanager" "video" "audio" "docker" ];
     shell = pkgs.zsh;
   };
@@ -63,7 +62,7 @@
     # when the account is first created, so it silently does nothing if a
     # nixos.qcow2 from an earlier run is still lying around. `password` is
     # reapplied on every activation.
-    users.users.coops.password = "nyx";
+    users.users.${username}.password = "nyx";
     users.users.root.password = "nyx";
 
     # If home-manager fails, none of our config applies and you fall back to
