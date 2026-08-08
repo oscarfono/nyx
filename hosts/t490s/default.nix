@@ -52,6 +52,28 @@
   };
   programs.zsh.enable = lib.mkDefault true;
 
+  # ---------------------------------------------------------------------
+  # VM variant
+  # ---------------------------------------------------------------------
+  # Applies ONLY to `nixos-rebuild build-vm` / the system.build.vm output.
+  # Never reaches real hardware, so a throwaway password here does not
+  # weaken the installed system.
+  virtualisation.vmVariant = {
+    # `password`, not `initialPassword`. initialPassword only takes effect
+    # when the account is first created, so it silently does nothing if a
+    # nixos.qcow2 from an earlier run is still lying around. `password` is
+    # reapplied on every activation.
+    users.users.coops.password = "nyx";
+    users.users.root.password = "nyx";
+
+    virtualisation = {
+      memorySize = 4096;
+      cores = 4;
+      resolution = { x = 1600; y = 900; };
+      qemu.options = [ "-vga none" "-device virtio-vga-gl" "-display gtk,gl=on" ];
+    };
+  };
+
   time.timeZone = "Australia/Perth";
   i18n.defaultLocale = "en_AU.UTF-8";
   console.keyMap = "us";
