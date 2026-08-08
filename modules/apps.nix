@@ -18,11 +18,10 @@
     # Credentials. KeePassXC with a local kdbx, no cloud vendor in the loop.
     keepassxc
 
-    # Always available, even when Emacs is not.
-    neovim
+    # Neovim is configured in home/default.nix.
 
     # Assistant.
-    unstable.claude-code
+    claude-code
   ];
 
   # Brave, de-fanged. Managed policy is the supported way to do this and it

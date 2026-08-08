@@ -2,12 +2,10 @@
   description = "Nyx - an opinionated, security-first NixOS desktop";
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
-
-    nixpkgs-unstable.url = "github:NixOS/nixpkgs/nixos-unstable";
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
     home-manager = {
-      url = "github:nix-community/home-manager/release-26.05";
+      url = "github:nix-community/home-manager";   # master, tracks unstable
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
@@ -27,26 +25,16 @@
     };
   };
 
-  outputs = { self, nixpkgs, nixpkgs-unstable, home-manager, nixos-hardware, sops-nix, lanzaboote, ... }@inputs:
+  outputs = { self, nixpkgs, home-manager, nixos-hardware, sops-nix, lanzaboote, ... }@inputs:
     let
       system = "x86_64-linux";
 
-      # Overlay giving every module access to `pkgs.unstable.<name>` for the
-      # handful of fast-moving packages we do not want pinned to stable.
-      overlay-unstable = final: prev: {
-        unstable = import nixpkgs-unstable {
-          inherit system;
-          config.allowUnfree = true;
-        };
-      };
     in
     {
       nixosConfigurations.beta = nixpkgs.lib.nixosSystem {
         inherit system;
         specialArgs = { inherit inputs; };
         modules = [
-          { nixpkgs.overlays = [ overlay-unstable ]; }
-
           nixos-hardware.nixosModules.lenovo-thinkpad-t490s
 
           sops-nix.nixosModules.sops

@@ -5,6 +5,8 @@
     ./hardware-configuration.nix
     ../../modules/desktop.nix
     ../../modules/apps.nix
+    ../../modules/fonts.nix
+    ../../modules/power.nix
     ../../modules/emacs.nix
     ../../modules/devops.nix
     ../../modules/security.nix
@@ -46,9 +48,9 @@
     isNormalUser = true;
     description = "Coops";
     extraGroups = [ "wheel" "networkmanager" "video" "audio" "docker" ];
-    shell = pkgs.fish;
+    shell = pkgs.zsh;
   };
-  programs.fish.enable = true;
+  programs.zsh.enable = lib.mkDefault true;
 
   time.timeZone = "Australia/Perth";
   i18n.defaultLocale = "en_AU.UTF-8";
