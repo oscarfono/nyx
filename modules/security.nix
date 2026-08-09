@@ -113,9 +113,12 @@
   services.resolved = {
     enable = true;
     settings.Resolve = {
-      DNSSEC = "true";
-      DNSOverTLS = "true";
-      FallbackDNS = [ "9.9.9.9#dns.quad9.net" "149.112.112.112#dns.quad9.net" ];
+      DNSSEC = "allow-downgrade";
+      DNSOverTLS = "opportunistic";
+      DNS = [ "9.9.9.9#dns.quad9.net" "149.112.112.112#dns.quad9.net 2620:fe::fe#dns.quad9.net" ];
+      FallbackDNS = [ "1.1.1.1#cloudflare-dns.com" ];
+      Domains = "~.";
+      Cache = "yes";
     };
   };
   # Quad9, not 8.8.8.8. No Google, including at layer 7.

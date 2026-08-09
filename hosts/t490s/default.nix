@@ -82,7 +82,7 @@
     };
   };
 
-  time.timeZone = "Australia/Perth";
+  time.timeZone = "Australia/Melbourne";
   i18n.defaultLocale = "en_AU.UTF-8";
   console.keyMap = "us";
 

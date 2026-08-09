@@ -59,7 +59,7 @@
   programs.git = {
     enable = true;
     signing.signByDefault = true;
-    # signing.key = "YOUR-GPG-KEY-ID";
+    # signing.key = "5196AA7DFD93DC64";
 
     # home-manager moved git config under `settings` upstream. userName,
     # userEmail and extraConfig are all folded in here now.
