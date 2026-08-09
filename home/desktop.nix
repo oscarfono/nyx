@@ -115,8 +115,8 @@ in
       end
 
       -- Capture
-      ${luaBind "Print" (exec "grim -g \"$(slurp)\" - | wl-copy")}
-      ${luaBind "SHIFT + Print" (exec "grim -g \"$(slurp)\" - | satty -f -")}
+      ${luaBind "Print" (exec "nyx-shot clipboard")} 
+      ${luaBind "SHIFT + Print" (exec "nyx-shot edit")}
       ${luaBind "SUPER + SHIFT + R" (exec "nyx-record")}
 
       -- Media and brightness. locked = works on the lock screen.
