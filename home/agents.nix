@@ -20,7 +20,7 @@
     # pinentry-gnome3, NOT curses: the Emacs daemon and any GUI app have no
     # terminal for a curses prompt to draw in, so the passphrase request
     # hangs forever and looks like a hung application.
-    pinentryPackage = pkgs.pinentry-gnome3;
+    pinentry.package = pkgs.pinentry-gnome3;
 
     # Unlock once per session rather than per operation. Long enough to stop
     # being irritating during a work session, short enough that a locked
@@ -58,9 +58,12 @@
   programs.ssh = {
     enable = true;
 
-    # Keys are added to the agent on first use rather than up front, so
-    # nothing prompts you at login for a key you may not touch that day.
-    matchBlocks = {
+    # home-manager is removing its implicit defaults, so opt out and state
+    # what we actually want. matchBlocks became `settings` in the same
+    # change.
+    enableDefaultConfig = false;
+
+    settings = {
       "github.com" = {
         user = "git";
         identityFile = "~/.ssh/id_ed25519_github";
@@ -69,11 +72,15 @@
       };
 
       "*" = {
+        # Keys join the agent on first use rather than at login, so nothing
+        # prompts for a key you may not touch today.
         addKeysToAgent = "yes";
         serverAliveInterval = 60;
         # Do not hand your agent to a remote host unless you mean to.
         forwardAgent = false;
         hashKnownHosts = true;
+        controlMaster = "no";
+        compression = false;
       };
     };
   };

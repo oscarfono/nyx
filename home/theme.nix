@@ -26,6 +26,7 @@ in
   # home.pointerCursor sets it for GTK, X11 and the XCURSOR_* environment
   # in one place, which is what Hyprland and every toolkit actually read.
   home.pointerCursor = {
+    enable = true;
     name = cursorTheme;
     package = cursorPackage;
     size = cursorSize;
@@ -86,7 +87,9 @@ in
   # KeePassXC is the Qt app you will actually look at, so this matters.
   qt = {
     enable = true;
-    platformTheme.name = "gtk";
+    # "gtk3" is the modern native Qt plugin; plain "gtk" now means the
+    # legacy qtstyleplugins path.
+    platformTheme.name = "gtk3";
     style = {
       name = "adwaita-dark";
       package = pkgs.adwaita-qt;
