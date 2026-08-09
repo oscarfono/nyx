@@ -22,8 +22,8 @@
 
   "󰄀  Capture" = {
     submenu = {
-      "  Region to clipboard" = { exec = "grim -g \"$(slurp)\" - | wl-copy"; };
-      "  Region to editor"    = { exec = "grim -g \"$(slurp)\" - | satty -f -"; };
+      "  Region to clipboard" = { exec = "nyx-shot clipboard"; };
+      "  Region to editor"    = { exec = "nyx-shot edit"; };
       "󰍹  Whole screen"        = { exec = "grim - | wl-copy"; };
       "  Record start/stop"   = { exec = "nyx-record"; };
     };

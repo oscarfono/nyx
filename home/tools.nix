@@ -18,6 +18,21 @@ let
     fi
   '';
 
+  # Screenshots. These exist as scripts rather than inline in the keybind
+  # because the command contains quotes and $(...), which have to survive a
+  # Nix string, then a Lua string, then the shell. Three layers of escaping
+  # is how the last Hyprland config broke. A script is one layer.
+  nyx-shot = pkgs.writeShellScriptBin "nyx-shot" ''
+    set -eu
+    REGION=$(${pkgs.slurp}/bin/slurp) || exit 0
+    case "''${1:-clipboard}" in
+      clipboard) ${pkgs.grim}/bin/grim -g "$REGION" - | ${pkgs.wl-clipboard}/bin/wl-copy
+                 ${pkgs.libnotify}/bin/notify-send "Screenshot" "Copied to clipboard" ;;
+      edit)      ${pkgs.grim}/bin/grim -g "$REGION" - | ${pkgs.satty}/bin/satty -f - ;;
+      *)         echo "usage: nyx-shot [clipboard|edit]" >&2; exit 1 ;;
+    esac
+  '';
+
   # Reminders, using systemd rather than a daemon of its own.
   #   nyx-remind 25m "stand up"
   # systemd-run --user schedules a transient timer; nothing persists, nothing
@@ -53,6 +68,7 @@ let
 in
 {
   home.packages = [
+    nyx-shot
     nyx-record
     nyx-remind
     nyx-remind-prompt

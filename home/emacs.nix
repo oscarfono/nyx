@@ -63,22 +63,24 @@ in
   # The Emacs daemon starts at graphical login. On a fresh machine that can
   # be before the bootstrap above has finished cloning, which gives you a
   # daemon running with no config until the next restart. Order it.
+  #
+  # services.emacs with startWithGraphical already sets the unit type and
+  # install target. Adding our own Install.WantedBy / PartOf / Restart on
+  # top of that made systemd reject the unit outright (BadUnitSetting), so
+  # this override does only the two things the module does not:
+  # ordering after the bootstrap, and a Wayland environment.
   systemd.user.services.emacs = {
-    Unit.After = [ "nyx-emacs-bootstrap.service" "graphical-session.target" ];
+    Unit.After = [ "nyx-emacs-bootstrap.service" ];
     Unit.Wants = [ "nyx-emacs-bootstrap.service" ];
-    Unit.PartOf = [ "graphical-session.target" ];
 
     # The daemon inherits the systemd user environment, which does not
-    # automatically include the Wayland session. Without these it starts
+    # include the Wayland session by default. Without these it starts
     # headless or falls back to XWayland, and emacsclient -c gives you a
-    # frame that cannot open files properly.
+    # frame that cannot properly open files.
     Service.Environment = [
       "GDK_BACKEND=wayland"
       "XDG_SESSION_TYPE=wayland"
       "EGL_PLATFORM=wayland"
     ];
-    Service.Restart = "on-failure";
-
-    Install.WantedBy = [ "graphical-session.target" ];
   };
 }

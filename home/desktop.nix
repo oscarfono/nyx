@@ -115,7 +115,7 @@ in
       end
 
       -- Capture
-      ${luaBind "Print" (exec "nyx-shot clipboard")} 
+      ${luaBind "Print" (exec "nyx-shot clipboard")}
       ${luaBind "SHIFT + Print" (exec "nyx-shot edit")}
       ${luaBind "SUPER + SHIFT + R" (exec "nyx-record")}
 
