@@ -63,6 +63,18 @@
     };
   };
 
+  # ---------------------------------------------------------------------
+  # Mobile broadband (WWAN)
+  # ---------------------------------------------------------------------
+  # The T490s has an M.2 WWAN slot and a SIM tray, but the modem card is a
+  # build-time option and many units ship without it. Harmless if absent:
+  # ModemManager simply finds no device. See SUMMARY.md for how to check.
+  networking.networkmanager.plugins = with pkgs; [
+    networkmanager-fortisslvpn
+    networkmanager-openvpn
+  ];
+  services.udev.packages = [ pkgs.modemmanager ];
+
   # Audio
   services.pulseaudio.enable = false;
   security.rtkit.enable = true;
@@ -107,6 +119,12 @@
 
     # Sharing. LocalSend is the AirDrop-alike: LAN only, no account.
     localsend
+
+    modemmanager
+    modem-manager-gui
+    libmbim
+    libqmi
+    mobile-broadband-provider-info
 
     # Cursor and icons. See home/theme.nix for which are selected.
     bibata-cursors

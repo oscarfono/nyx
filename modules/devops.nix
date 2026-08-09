@@ -57,6 +57,12 @@
     yubikey-manager
     pinentry-gnome3
 
+    # Hardware inspection. Not installed by default on NixOS, which is why
+    # lsusb/lspci come back as command-not-found on a fresh system.
+    usbutils
+    pciutils
+    dmidecode
+
     # Network and inspection
     nmap
     tcpdump
@@ -99,9 +105,12 @@
     nix-direnv.enable = true;
   };
 
+  # gpg-agent runs as a home-manager user service (home/agents.nix), not
+  # here. Two agents fighting over ~/.gnupg sockets is a bad afternoon.
+  # This stays off deliberately.
   programs.gnupg.agent = {
-    enable = true;
-    enableSSHSupport = true;
+    enable = false;
+    enableSSHSupport = false;
     # NOT pinentry-curses. The Emacs daemon has no terminal, so a curses
     # prompt has nowhere to draw and the passphrase request hangs forever,
     # which looks exactly like the daemon failing to start.
