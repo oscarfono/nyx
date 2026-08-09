@@ -95,8 +95,7 @@
   #      (generate with: mkpasswd -m yescrypt).
   #   3. Uncomment hashedPasswordFile, flip mutableUsers to false, rebuild.
   #      Do NOT reboot until you have confirmed you can still su to the user.
-  users.mutableUsers = true;
-  # users.users.coops.hashedPasswordFile = config.sops.secrets.coops-password.path;
+  # users.mutableUsers and the password file are set in modules/secrets.nix.
 
   # ---------------------------------------------------------------------
   # Network
@@ -161,17 +160,9 @@
   # ---------------------------------------------------------------------
   # Secrets
   # ---------------------------------------------------------------------
-  # sops-nix decrypts at activation time into /run/secrets, never into the
-  # world-readable Nix store. Age key derived from the host SSH key.
-  # DISABLED until secrets/secrets.yaml actually exists. Nix evaluates the
-  # path at build time, so pointing at a missing file fails the whole build.
-  # Uncomment together, after you have created the file with sops.
-  #
-  # sops = {
-  #   defaultSopsFile = ../secrets/secrets.yaml;
-  #   age.sshKeyPaths = [ "/etc/ssh/ssh_host_ed25519_key" ];
-  #   secrets.coops-password = { neededForUsers = true; };
-  # };
+  # See modules/secrets.nix. Kept separate because it is gated on the
+  # encrypted file existing, and mixing that conditional in here made the
+  # hardening options hard to read.
 
   # ---------------------------------------------------------------------
   # Auditing

@@ -13,36 +13,6 @@
 let
   t = import ../lib/melancholy.nix;
 
-  binds = [
-    "SUPER, Return, exec, ghostty"
-    "SUPER, E, exec, emacsclient -c -a ''"
-    "SUPER, B, exec, brave"
-    "SUPER SHIFT, B, exec, firefox"
-    "SUPER, P, exec, keepassxc"
-    "SUPER, Space, exec, fuzzel"
-    "SUPER ALT, Space, exec, nyx-menu-root"
-    "SUPER, K, exec, ghostty -e less ${config.xdg.configHome}/nyx/keybinds.txt"
-    "SUPER, Q, killactive,"
-    "SUPER, F, fullscreen,"
-    "SUPER, V, togglefloating,"
-    "SUPER SHIFT, L, exec, hyprlock"
-    ", Print, exec, grim -g \"$(slurp)\" - | wl-copy"
-    "SHIFT, Print, exec, grim -g \"$(slurp)\" - | satty -f -"
-    "SUPER SHIFT, R, exec, wf-recorder -g \"$(slurp)\" -f $HOME/Videos/rec-$(date +%s).mp4"
-  ]
-  ++ builtins.concatLists (builtins.genList
-    (i: let ws = toString (i + 1); in [
-      "SUPER, ${ws}, workspace, ${ws}"
-      "SUPER SHIFT, ${ws}, movetoworkspace, ${ws}"
-    ]) 9);
-
-  mediaBinds = [
-    ",XF86AudioRaiseVolume, exec, swayosd-client --output-volume raise"
-    ",XF86AudioLowerVolume, exec, swayosd-client --output-volume lower"
-    ",XF86AudioMute, exec, swayosd-client --output-volume mute-toggle"
-    ",XF86MonBrightnessUp, exec, swayosd-client --brightness raise"
-    ",XF86MonBrightnessDown, exec, swayosd-client --brightness lower"
-  ];
 in
 {
   # Hyprland 0.55 deprecated hyprlang; .conf support goes away in 0.57.
@@ -277,14 +247,69 @@ in
   programs.hyprlock = {
     enable = true;
     settings = {
-      background = [{ color = t.bg; }];
+      general = {
+        hide_cursor = true;
+        grace = 2;              # a stray keypress within 2s dismisses it
+        no_fade_in = false;
+      };
+
+      background = [{
+        path = "${../assets/wallpapers/melancholy-dusk.png}";
+        blur_passes = 3;
+        blur_size = 8;
+        brightness = 0.6;
+      }];
+
+      label = [
+        {
+          # Clock
+          text = "$TIME";
+          color = t.fg;
+          font_size = 92;
+          font_family = "CommitMono Nerd Font Mono";
+          position = "0, 220";
+          halign = "center";
+          valign = "center";
+        }
+        {
+          # Date
+          text = ''cmd[update:60000] date +"%A, %d %B"'';
+          color = t.fgMuted;
+          font_size = 20;
+          font_family = "Raleway";
+          position = "0, 140";
+          halign = "center";
+          valign = "center";
+        }
+        {
+          # Who is logged in
+          text = "$USER";
+          color = t.amber;
+          font_size = 14;
+          font_family = "Raleway";
+          position = "0, -110";
+          halign = "center";
+          valign = "center";
+        }
+      ];
+
       input-field = [{
-        size = "300, 50";
+        size = "320, 52";
         outline_thickness = 2;
+        dots_size = 0.28;
+        dots_spacing = 0.3;
+        dots_center = true;
         outer_color = t.amber;
         inner_color = t.bgSubtle;
         font_color = t.fg;
+        check_color = t.cyan;
+        fail_color = t.red;
+        fail_text = "$FAIL";
         placeholder_text = "";
+        rounding = 8;
+        position = "0, -40";
+        halign = "center";
+        valign = "center";
       }];
     };
   };

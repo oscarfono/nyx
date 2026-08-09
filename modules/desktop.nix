@@ -1,5 +1,9 @@
 { config, pkgs, lib, ... }:
 
+let
+  t = import ../lib/melancholy.nix;
+in
+
 # Nyx desktop, system side.
 #
 # This is ours. Not a wrapper around omarchy-nix or omanix. Where those
@@ -40,27 +44,78 @@
   boot.initrd.verbose = false;
   boot.loader.timeout = 0;      # hold SPACE at boot to get the menu back
 
-  # Minimal display manager. Keeps the boot path small and avoids dragging
-  # in a full desktop environment's session machinery.
-  services.greetd = {
+  # ---------------------------------------------------------------------
+  # Greeter
+  # ---------------------------------------------------------------------
+  # ReGreet, not tuigreet. tuigreet is a terminal UI: fine, fast, and always
+  # going to look like a terminal. ReGreet is a real GTK4 greeter, so it
+  # takes our GTK theme, our icon theme, our cursor and a wallpaper, and the
+  # login screen finally matches the desktop behind it.
+  #
+  # (GTK4 rather than GTK3 — ReGreet is built on GTK4/libadwaita. GTK3 would
+  # mean an older greeter with less consistent theming, not a better one.)
+  #
+  # programs.regreet configures services.greetd itself, including running
+  # under cage, so we do not declare default_session here.
+  services.greetd.enable = true;
+
+  programs.regreet = {
     enable = true;
-    settings.default_session = {
-      # tuigreet is a top-level package now, not an attribute of greetd.
-      # tuigreet, themed to melancholy. Colours are limited to the ANSI
-      # names it accepts, so amber maps to yellow and the muted greys to
-      # the bright/normal black pair.
-      command = lib.concatStringsSep " " [
-        "${lib.getExe pkgs.tuigreet}"
-        "--time --time-format '%H:%M  %a %d %b'"
-        "--remember --remember-session"
-        "--asterisks"
-        "--greeting 'Not Your X'"
-        "--window-padding 2"
-        "--theme 'border=yellow;text=white;prompt=yellow;time=cyan;action=white;button=yellow;container=black;input=white'"
-        "--cmd 'uwsm start hyprland-uwsm.desktop'"
-      ];
-      user = "greeter";
+
+    # Same wallpaper as the desktop, so login and session are continuous.
+    settings = {
+      background = {
+        path = ../assets/wallpapers/melancholy-dusk.png;
+        fit = "Cover";
+      };
+      GTK = {
+        application_prefer_dark_theme = true;
+        cursor_theme_name = "Bibata-Modern-Ice";
+        font_name = "Raleway 12";
+        icon_theme_name = "Papirus-Dark";
+        theme_name = "Adwaita-dark";
+      };
+      commands = {
+        reboot = [ "systemctl" "reboot" ];
+        poweroff = [ "systemctl" "poweroff" ];
+      };
+      appearance.greeting_msg = "Not Your X";
     };
+
+    # Melancholy, applied to the greeter's own widgets.
+    extraCss = ''
+      window, .background {
+        background-color: ${t.bg};
+      }
+      entry {
+        background-color: ${t.bgSubtle};
+        color: ${t.fg};
+        border: 2px solid ${t.amber};
+        border-radius: 6px;
+        padding: 8px;
+      }
+      entry:focus {
+        border-color: ${t.cyan};
+      }
+      button {
+        background-image: none;
+        background-color: ${t.bgSubtle};
+        color: ${t.fg};
+        border: 1px solid ${t.fgMuted};
+        border-radius: 6px;
+      }
+      button:hover {
+        border-color: ${t.amber};
+        color: ${t.amber};
+      }
+      label {
+        color: ${t.fg};
+      }
+      #clock, .clock {
+        color: ${t.cyan};
+        font-size: 22px;
+      }
+    '';
   };
 
   # ---------------------------------------------------------------------

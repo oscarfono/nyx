@@ -1,0 +1,18 @@
+# sops rules. The recipient below is THIS machine's host SSH key converted
+# to age. Regenerate it with:
+#
+#   nix shell nixpkgs#ssh-to-age -c \
+#     sh -c 'ssh-to-age < /etc/ssh/ssh_host_ed25519_key.pub'
+#
+# Adding a second machine means adding its age key here and running
+# `sops updatekeys secrets/secrets.yaml` so the file is re-encrypted to
+# both. Do that BEFORE the new machine tries to build.
+
+keys:
+  - &beta REPLACE_WITH_AGE_PUBLIC_KEY
+
+creation_rules:
+  - path_regex: secrets/[^/]+\.yaml$
+    key_groups:
+      - age:
+          - *beta

@@ -88,6 +88,7 @@
         ./modules/emacs.nix
         ./modules/devops.nix
         ./modules/security.nix
+        ./modules/secrets.nix
         ./modules/power.nix
         ./modules/fonts.nix
       ];

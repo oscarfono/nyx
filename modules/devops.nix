@@ -52,6 +52,7 @@
     # Secrets
     sops
     age
+    mkpasswd
     ssh-to-age
     gnupg
     yubikey-manager
