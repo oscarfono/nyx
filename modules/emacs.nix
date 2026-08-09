@@ -1,25 +1,8 @@
 { config, pkgs, lib, ... }:
 
-# Emacs, system side.
-#
-# Division of labour, given you run straight.el:
-#   Nix      : the Emacs binary, native-comp toolchain, and every system
-#              binary Emacs or your packages shell out to
-#   straight : all elisp, including melancholy-theme
-#
-# Nothing is listed in emacsWithPackages. Two package managers on one
-# load-path is the failure mode this whole project exists to avoid.
-#
-# melancholy-theme goes in your config, not here. One line, since it is your
-# repo and straight is already bootstrapped by the time init.el runs:
-#
-#   (use-package melancholy-theme
-#     :straight (:host github :repo "oscarfono/melancholy-theme")
-#     :config (load-theme 'melancholy t))
-#
-# NOTE: delete the emacs30-pgtk entry, the services.emacs block and the
-# EDITOR/VISUAL variables from modules/apps.nix, or the rebuild fails on
-# duplicate option definitions.
+# Emacs. Nix owns the binary, native-comp toolchain and every binary Emacs
+# shells out to. straight.el owns all elisp. Do not add elisp packages here:
+# two package managers on one load-path is the failure mode.
 
 let
   emacsPkg = pkgs.emacs30-pgtk;

@@ -4,9 +4,8 @@
 # Emacs lives in modules/emacs.nix, not here.
 
 {
-  # Unfree is opt-in per package, never blanket-enabled. Anything added here
-  # is a deliberate decision, and the list doubles as documentation of every
-  # non-free thing on the system.
+  # Unfree is opt-in per package. This list is the complete inventory of
+  # non-free software on the machine.
   nixpkgs.config.allowUnfreePredicate = pkg:
     builtins.elem (lib.getName pkg) [
       "brave"
@@ -54,9 +53,7 @@
     DefaultSearchProviderSearchURL = "https://duckduckgo.com/?q={searchTerms}";
   };
 
-  # No Google. A statement of intent, but also enforced:
-  # no chrome, no chromium, no Google auth broker, no Google DNS (see
-  # modules/security.nix).
+  # No Google auth broker or geolocation. DNS is Quad9, see security.nix.
   services.gnome.gnome-online-accounts.enable = lib.mkForce false;
   services.geoclue2.enable = lib.mkForce false;
 }

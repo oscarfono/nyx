@@ -3,12 +3,9 @@
 # Nyx desktop, user side. Every colour comes from lib/melancholy.nix, so the
 # bar, notifications, lock screen and terminal cannot drift apart.
 #
-# NOTE ON HYPRLAND: we generate hyprland.lua ourselves rather than using
-# home-manager's wayland.windowManager.hyprland module. The module's
-# serialiser produced invalid Lua for us three times running ($mod,
-# exec-once, col.active_border). Writing the Lua directly means the file on
-# disk is the file we wrote, and the Hyprland wiki is the only reference we
-# need.
+# Hyprland config is written as Lua here rather than through home-manager's
+# wayland.windowManager.hyprland module, whose serialiser emits invalid Lua
+# for $mod, exec-once and col.active_border.
 
 let
   t = import ../lib/melancholy.nix;

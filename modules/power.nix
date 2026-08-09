@@ -1,28 +1,17 @@
 { config, pkgs, lib, ... }:
 
-# Power, battery and suspend for the T490.
-#
-# The Hyprland ports floating around are desktop-first and largely ignore
-# laptops. This module is where Nyx earns its keep on a ThinkPad.
+# Power, battery and suspend.
 
 {
   # ---------------------------------------------------------------------
   # Suspend
   # ---------------------------------------------------------------------
-  # The T490 supports S3 ("deep") as well as s2idle. s2idle on this
-  # generation drains noticeably in a bag overnight. Force deep sleep.
-  #
-  # If the BIOS is set to "Windows" sleep mode, deep is unavailable. Check
-  # with: cat /sys/power/mem_sleep
-  # If it shows [s2idle] only, change Config > Power > Sleep State to Linux
-  # in BIOS, then this parameter takes effect.
+  # S3 rather than s2idle, which drains hard overnight in a bag.
+  # Verify with: cat /sys/power/mem_sleep
   boot.kernelParams = [ "mem_sleep_default=deep" ];
 
-  # Suspend on lid close, hibernate if it stays shut for a long time.
-  # Requires a swap device at least as large as RAM, so this is commented
-  # until you have decided on swap. Plain suspend works without it.
-  # logind options moved under `settings.Login` to match systemd's own
-  # config keys.
+  # suspend-then-hibernate needs swap >= RAM; not configured, so plain
+  # suspend for now.
   services.logind.settings.Login = {
     HandleLidSwitch = "suspend";
     HandleLidSwitchExternalPower = "suspend";

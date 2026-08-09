@@ -1,18 +1,14 @@
 { config, pkgs, lib, inputs, ... }:
 
-# The part that distinguishes Nyx from a nice-looking Hyprland config.
-# Everything here is deliberate. Read the comments before you flip switches,
-# because several of these trade convenience for assurance.
+# Hardening. Several of these trade convenience for assurance; read before
+# flipping switches.
 
 {
   # ---------------------------------------------------------------------
   # Boot integrity
   # ---------------------------------------------------------------------
-  # Lanzaboote gives you Secure Boot signed with your own keys instead of
-  # Microsoft's. It is left OFF here because enabling it before you have
-  # created and enrolled keys will leave you with an unbootable machine.
-  #
-  # Enrolment, once, on the target box:
+  # Secure Boot with your own keys. OFF until keys are enrolled: enabling
+  # first leaves the machine unbootable. Enrolment, once:
   #   sudo nix run nixpkgs#sbctl create-keys
   #   (reboot into firmware, clear existing keys, enter Setup Mode)
   #   sudo nix run nixpkgs#sbctl enroll-keys -- --microsoft
@@ -24,12 +20,10 @@
   #   pkiBundle = "/var/lib/sbctl";
   # };
 
-  # systemd in stage 1 initrd. Required for TPM2 unlock, and a better
-  # security posture than the old shell-script initrd regardless.
+  # Required for TPM2 unlock.
   boot.initrd.systemd.enable = true;
 
-  # Full disk encryption is configured in hardware-configuration.nix by
-  # nixos-generate-config. To add TPM2-backed unlock afterwards, once:
+  # LUKS lives in hardware-configuration.nix. To add TPM2 unlock, once:
   #   sudo systemd-cryptenroll --tpm2-device=auto \
   #        --tpm2-pcrs=0+2+7+12 /dev/nvme0n1p2
   # PCR 7 binds to Secure Boot state, so do this AFTER enrolling keys or
@@ -40,10 +34,8 @@
   # ---------------------------------------------------------------------
   boot.kernelPackages = pkgs.linuxPackages_latest;
 
-  # Note deliberately NOT using linuxPackages_hardened. It lags on security
-  # patches, breaks some virtualisation, and the marginal gain over the
-  # sysctls below is small for a workstation. Revisit if this becomes a
-  # server profile.
+  # Not linuxPackages_hardened: it lags on patches and breaks virtualisation,
+  # for little gain over the sysctls below on a workstation.
 
   boot.kernel.sysctl = {
     "kernel.dmesg_restrict" = 1;

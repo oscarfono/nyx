@@ -4,12 +4,7 @@ let
   t = import ../lib/melancholy.nix;
 in
 
-# Nyx desktop, system side.
-#
-# This is ours. Not a wrapper around omarchy-nix or omanix. Where those
-# projects solved something well we take the idea, not the dependency:
-# a Hyprland session started through uwsm, a themed bar, a launcher, and
-# a capture pipeline, all declared as Nix rather than shipped as scripts.
+# Desktop, system side: Hyprland session, greeter, audio, portals, capture.
 
 {
   programs.hyprland = {
@@ -163,7 +158,7 @@ in
   };
 
   environment.systemPackages = with pkgs; [
-    # Shell of the desktop
+    # Desktop shell
     waybar
     fuzzel            # launcher. Smaller and saner than Walker for our needs.
     mako
@@ -172,7 +167,7 @@ in
     hyprpaper
     swayosd           # volume and brightness OSD
 
-    # Capture. The pipeline Omarchy gets right and worth copying.
+    # Capture
     grim
     slurp
     satty             # annotate screenshots
