@@ -55,25 +55,39 @@ in
   # (GTK4 rather than GTK3 — ReGreet is built on GTK4/libadwaita. GTK3 would
   # mean an older greeter with less consistent theming, not a better one.)
   #
-  # programs.regreet configures services.greetd itself, including running
+  # services.displayManager.regreet configures services.greetd itself, including running
   # under cage, so we do not declare default_session here.
   services.greetd.enable = true;
 
-  programs.regreet = {
+  services.displayManager.regreet = {
     enable = true;
 
-    # Same wallpaper as the desktop, so login and session are continuous.
+    # Theme, cursor, icons and font are FIRST-CLASS OPTIONS on this module.
+    # It writes them into settings.GTK itself, so setting settings.GTK by
+    # hand produces a conflicting definition rather than an override.
+    theme = {
+      name = "Adwaita-dark";
+      package = pkgs.gnome-themes-extra;
+    };
+    cursorTheme = {
+      name = "Bibata-Modern-Ice";
+      package = pkgs.bibata-cursors;
+    };
+    iconTheme = {
+      name = "Papirus-Dark";
+      package = pkgs.papirus-icon-theme;
+    };
+    font = {
+      name = "Raleway";
+      package = pkgs.raleway;
+      size = 12;
+    };
+
     settings = {
+      # Same wallpaper as the desktop, so login and session are continuous.
       background = {
         path = ../assets/wallpapers/melancholy-dusk.png;
         fit = "Cover";
-      };
-      GTK = {
-        application_prefer_dark_theme = true;
-        cursor_theme_name = "Bibata-Modern-Ice";
-        font_name = "Raleway 12";
-        icon_theme_name = "Papirus-Dark";
-        theme_name = "Adwaita-dark";
       };
       commands = {
         reboot = [ "systemctl" "reboot" ];
