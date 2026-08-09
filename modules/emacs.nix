@@ -75,8 +75,13 @@ in
   # replacing it, which is the difference between this working and the
   # daemon losing its ExecStart.
   systemd.user.services.emacs = {
-    after = [ "nyx-emacs-bootstrap.service" ];
-    wants = [ "nyx-emacs-bootstrap.service" ];
+    # The module already sets unitConfig.After = "graphical-session.target"
+    # as a plain string, so adding our own `after` list is a conflicting
+    # definition rather than a merge. mkForce with BOTH values is the fix;
+    # dropping ours entirely would mean the daemon can start before
+    # .emacs.d exists on a fresh machine.
+    unitConfig.After = lib.mkForce "graphical-session.target nyx-emacs-bootstrap.service";
+    unitConfig.Wants = "nyx-emacs-bootstrap.service";
 
     # The daemon inherits the systemd user environment, which does not
     # include the Wayland session by default. Without these it starts
