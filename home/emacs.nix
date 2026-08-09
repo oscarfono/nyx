@@ -60,27 +60,11 @@ in
     Install.WantedBy = [ "default.target" ];
   };
 
-  # The Emacs daemon starts at graphical login. On a fresh machine that can
-  # be before the bootstrap above has finished cloning, which gives you a
-  # daemon running with no config until the next restart. Order it.
-  #
-  # services.emacs with startWithGraphical already sets the unit type and
-  # install target. Adding our own Install.WantedBy / PartOf / Restart on
-  # top of that made systemd reject the unit outright (BadUnitSetting), so
-  # this override does only the two things the module does not:
-  # ordering after the bootstrap, and a Wayland environment.
-  systemd.user.services.emacs = {
-    Unit.After = [ "nyx-emacs-bootstrap.service" ];
-    Unit.Wants = [ "nyx-emacs-bootstrap.service" ];
-
-    # The daemon inherits the systemd user environment, which does not
-    # include the Wayland session by default. Without these it starts
-    # headless or falls back to XWayland, and emacsclient -c gives you a
-    # frame that cannot properly open files.
-    Service.Environment = [
-      "GDK_BACKEND=wayland"
-      "XDG_SESSION_TYPE=wayland"
-      "EGL_PLATFORM=wayland"
-    ];
-  };
+  # NOTE: the Emacs unit itself is NOT defined here. services.emacs is a
+  # NixOS-level module, so its unit is generated system-wide. Declaring
+  # systemd.user.services.emacs in home-manager writes a SEPARATE file to
+  # ~/.config/systemd/user/emacs.service which shadows the real one, and
+  # since our version only carried After/Wants/Environment the result was a
+  # unit with no ExecStart at all. Ordering and Wayland env now live in
+  # modules/emacs.nix, where they merge with the module instead.
 }
