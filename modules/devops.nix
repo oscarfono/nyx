@@ -1,4 +1,4 @@
-{ config, pkgs, lib, inputs, ... }:
+{ config, pkgs, lib, inputs, username, ... }:
 
 # The part that earns the "devops/secops dream setup" description.
 
@@ -85,6 +85,9 @@
     vulnix
 
     # Shell quality of life
+    nvd          # nix version diff, used by nh
+    comma        # `, <command>` runs something you do not have installed
+
     ripgrep
     fd
     bat
@@ -100,6 +103,27 @@
     btop
     ncdu
   ];
+
+  # nh wraps nixos-rebuild with a progress view and, more usefully, prints a
+  # diff of what actually changed between generations. NH_FLAKE means
+  # `nh os switch` needs no path argument.
+  programs.nh = {
+    enable = true;
+    flake = "/home/${username}/Projects/nyx";
+    clean = {
+      enable = true;
+      extraArgs = "--keep 10 --keep-since 30d";
+    };
+  };
+
+  # comma: run a program you do not have, once, without installing it.
+  #   , cowsay hello
+  # Needs the nix-index database; see the note in CHEATSHEET.md.
+  programs.command-not-found.enable = false;   # replaced by nix-index
+  programs.nix-index = {
+    enable = true;
+    enableZshIntegration = true;
+  };
 
   programs.direnv = {
     enable = true;
@@ -135,9 +159,12 @@
   nix.registry.nixpkgs.flake = inputs.nixpkgs;
   nix.nixPath = [ "nixpkgs=${inputs.nixpkgs}" ];
 
-  nix.gc = {
-    automatic = true;
-    dates = "weekly";
-    options = "--delete-older-than 30d";
-  };
+  # Garbage collection is handled by programs.nh.clean above. Enabling
+  # nix.gc.automatic as well makes them fight over the same generations, and
+  # NixOS warns about it.
+  # nix.gc = {
+  #   automatic = true;
+  #   dates = "weekly";
+  #   options = "--delete-older-than 30d";
+  # };
 }

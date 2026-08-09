@@ -40,6 +40,43 @@ Unfree packages must also be added to the allow-list in `modules/apps.nix`.
 That list is deliberate: it is the complete inventory of non-free software
 on the machine.
 
+## Handy commands
+
+```bash
+nh os switch                 # rebuild with progress and a package diff
+nh os boot                   # same, applied at next boot
+nh clean all                 # garbage collect, keeping recent generations
+, cowsay hello               # run something you have not installed
+nix-index                    # build the comma database (slow, once)
+nvd diff /run/current-system ./result
+```
+
+## Specialisations
+
+Extra boot entries built from the same config:
+
+- **battery** — powersave governor, no Docker/libvirt/Bluetooth, aggressive
+  USB autosuspend. For a flight or a long day away from mains.
+- **performance** — performance governor, no charge thresholds.
+
+Pick one from the boot menu. To switch without rebooting:
+
+```bash
+sudo /run/current-system/specialisation/battery/bin/switch-to-configuration test
+```
+
+## Backups
+
+`modules/backup.nix` (restic, daily timer). Not imported until configured:
+set `repository`, add `restic-password` to `secrets/secrets.yaml`, import,
+then initialise once:
+
+```bash
+sudo restic -r <repo> --password-file /run/secrets/restic-password init
+sudo restic -r <repo> --password-file /run/secrets/restic-password snapshots
+sudo systemctl start restic-backups-beta.service    # run one now
+```
+
 ## Updating
 
 ```bash

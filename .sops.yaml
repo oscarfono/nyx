@@ -10,9 +10,11 @@
 
 keys:
   - &beta age1tdjjl0sd3326qrx2u58a77wy6g060z0xqj3gyenefyrfadjkgpzs3866fm
+  - &coops age1rru3fcx8xa07z09grvx3dvgxfhxkhp4nmpg397uxj9vwknqwesmqq3fwvq
 
 creation_rules:
   - path_regex: secrets/[^/]+\.yaml$
     key_groups:
       - age:
           - *beta
+          - *coops

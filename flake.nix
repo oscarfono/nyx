@@ -83,37 +83,37 @@
       # The full desktop module set. A different class of machine picks a
       # different list.
       desktopModules = [
-        ./modules/desktop.nix
         ./modules/apps.nix
-        ./modules/emacs.nix
+        ./modules/desktop.nix
         ./modules/devops.nix
-        ./modules/security.nix
-        ./modules/secrets.nix
-        ./modules/power.nix
+        ./modules/emacs.nix
         ./modules/fonts.nix
+        ./modules/power.nix
+        ./modules/secrets.nix
+        ./modules/security.nix
       ];
     in
-    {
-      nixosConfigurations = {
-        beta = mkHost {
-          hostName = "beta";
-          username = "coops";
-          hardware = nixos-hardware.nixosModules.lenovo-thinkpad-t490;
-          hostPath = ./hosts/t490;
-          modules = desktopModules;
-        };
+      {
+        nixosConfigurations = {
+          beta = mkHost {
+            hostName = "beta";
+            username = "coops";
+            hardware = nixos-hardware.nixosModules.lenovo-thinkpad-t490;
+            hostPath = ./hosts/t490;
+            modules = desktopModules;
+          };
 
-        # Adding a machine looks like this. Copy hosts/t490 to hosts/<name>,
-        # regenerate hardware-configuration.nix on that machine, and drop or
-        # add modules to taste.
-        #
-        # gamma = mkHost {
-        #   hostName = "gamma";
-        #   username = "sod";
-        #   hardware = null;                       # desktop, no profile
-        #   hostPath = ./hosts/desktop;
-        #   modules = desktopModules ++ [ ./modules/gaming.nix ];
-        # };
+          # Adding a machine looks like this. Copy hosts/t490 to hosts/<name>,
+          # regenerate hardware-configuration.nix on that machine, and drop or
+          # add modules to taste.
+          #
+          # gamma = mkHost {
+          #   hostName = "gamma";
+          #   username = "sod";
+          #   hardware = null;                       # desktop, no profile
+          #   hostPath = ./hosts/desktop;
+          #   modules = desktopModules ++ [ ./modules/gaming.nix ];
+          # };
       };
 
       formatter.${system} = nixpkgs.legacyPackages.${system}.nixpkgs-fmt;

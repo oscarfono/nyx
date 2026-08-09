@@ -134,10 +134,10 @@ in
       SUPER E             emacsclient
       SUPER B             brave            SUPER SHIFT B    firefox
       SUPER P             keepassxc
-    SUPER N             files (nautilus)
-    SUPER C             calculator
-    SUPER A             claude code
-    SUPER D             dictation toggle
+      SUPER N             files (nautilus)
+      SUPER C             calculator
+      SUPER A             claude code
+      SUPER D             dictation toggle
       SUPER Space         launcher (fuzzel)
       SUPER ALT Space     nyx menu
       SUPER K             this cheatsheet
@@ -377,7 +377,7 @@ in
       };
 
       background = [{
-        path = "${../assets/wallpapers/melancholy-dusk.png}";
+        path = "${../assets/wallpapers/dark-abstract.png}";
         blur_passes = 3;
         blur_size = 8;
         brightness = 0.6;

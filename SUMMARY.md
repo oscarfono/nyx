@@ -20,7 +20,9 @@ Repo: `github.com/oscarfono/nyx` (public). Working copy: `~/Projects/nyx`.
 LUKS-encrypted root · greetd/regreet · plymouth boot · Hyprland (Lua config)
 · Waybar · fuzzel · walker menus · mako · ghostty · zsh · Emacs daemon with
 straight.el · swaybg wallpapers · Quad9 DNS over TLS · sops-nix secrets with
-declarative passwords · Bluetooth · Steam · tree-sitter grammars.
+declarative passwords · Bluetooth · Steam · tree-sitter grammars · voice
+dictation (whisper.cpp, local) · restic backups to Exoscale · nh/comma
+tooling · battery and performance specialisations.
 
 Untested: battery life over a full day, external displays, dock, fingerprint
 reader.
@@ -58,6 +60,7 @@ modules/security.nix   hardening, DNS, firewall, audit, Secure Boot (opt-in)
 modules/secrets.nix    sops-nix, declarative user passwords
 modules/power.nix      power, battery, deep sleep
 modules/bluetooth.nix  bluez, blueman, A2DP codec preferences
+modules/backup.nix     restic to Exoscale SOS, daily timer
 modules/gaming.nix     Steam, gamemode, protontricks
 modules/fonts.nix      CommitMono, Raleway, Caveat
 home/desktop.nix       hyprland.lua, waybar, mako, fuzzel, hyprlock, ghostty
@@ -67,6 +70,8 @@ home/wallpaper.nix     swaybg unit + nyx-wallpaper script
 home/tools.nix         nyx-shot, nyx-record, nyx-remind
 home/emacs.nix         .emacs.d clone + straight seed (user service)
 home/treesitter.nix    prebuilt grammars into ~/.emacs.d/tree-sitter
+home/dictation.nix     whisper.cpp, SUPER+D toggle
+home/xdg.nix           default applications
 home/agents.nix        agent tooling
 hosts/t490/            hardware profile, host settings
 ```
@@ -84,7 +89,8 @@ hosts/t490/            hardware profile, host settings
 `SUPER+C` calculator · `SUPER+A` Claude Code · `SUPER+Space` launcher ·
 `SUPER+ALT+Space` menu · `SUPER+K` cheatsheet · `SUPER+Q` close ·
 `SUPER+F` fullscreen · `SUPER+V` float · `SUPER+CTRL+arrows` resize ·
-`SUPER+SHIFT+L` lock · `SUPER+1-9` workspaces · `Print` region to clipboard ·
+`SUPER+D` dictation · `SUPER+SHIFT+L` lock · `SUPER+1-9` workspaces ·
+`Print` region to clipboard ·
 `SHIFT+Print` to satty · `SUPER+SHIFT+R` record toggle.
 
 Menu sections: Style, Capture, Tools, Network, Nix, System, Session, Learn.
@@ -125,13 +131,55 @@ Menu sections: Style, Capture, Tools, Network, Nix, System, Session, Learn.
     hand.** Two different values is a hard conflict.
 14. **sops `neededForUsers` secrets land in `/run/secrets-for-users`,**
     not `/run/secrets`.
+15. **Secrets are 0400 root.** `sudo -E` does not help because sudo drops the
+    environment; source the env file *inside* the root shell:
+    `sudo sh -c 'set -a; . /run/secrets/x; set +a; cmd'`.
+16. **`programs.nh.clean` and `nix.gc.automatic` conflict.** Pick one.
+17. **Deleting a file that a .nix still references** gives "Path does not
+    exist in Git repository", which reads like a git problem and is not.
+
+## Backups
+
+restic to Exoscale Simple Object Storage, Geneva (`sos-ch-gva-2`). Swiss
+company, Swiss jurisdiction, data never leaves the zone's country. Client-side
+encryption means the provider holds opaque blobs regardless.
+
+Daily timer, `Persistent` so it catches up after the machine was off. Every
+run after the first is incremental — restic dedupes at block level. Retention
+is 7 daily, 5 weekly, 12 monthly, pruned in the same run.
+
+First snapshot: 17,320 files, 515 MiB, 392 MiB stored. Restore verified.
+
+Backed up: `.shh`, `.ssh`, `.gnupg`, `.emacs.d`, Documents, Projects,
+Pictures. Excluded: `.git`, `node_modules`, `target`, `result`, `.direnv`,
+`straight/build`, `eln-cache`. The Nix store is not backed up; the flake
+rebuilds it.
+
+Credentials are two sops secrets: `restic-password` and `restic-s3-env`
+(an EnvironmentFile with the Exoscale IAM key, secret and region).
+
+```bash
+# run one now
+sudo systemctl start restic-backups-beta.service
+
+# anything needing the repo directly must source the env as root
+sudo sh -c 'set -a; . /run/secrets/restic-s3-env; set +a; \
+  restic -r s3:https://sos-ch-gva-2.exo.io/beta-backup-bucket \
+  --password-file /run/secrets/restic-password snapshots'
+```
+
+**Losing `restic-password` loses the backups.** Keep a copy off this machine.
 
 ## Secrets
 
-`.sops.yaml` recipient `&beta` is the **host** SSH key
-(`ssh-to-age < /etc/ssh/ssh_host_ed25519_key.pub`), so only this machine
-decrypts. A reinstall generates a new host key and orphans the file — add a
-personal age key as a second recipient before that becomes a problem.
+Two recipients in `.sops.yaml`: `&beta`, the **host** SSH key
+(`ssh-to-age < /etc/ssh/ssh_host_ed25519_key.pub`), and a personal age key at
+`~/.config/sops/age/keys.txt`. The host key lets sops-nix decrypt at
+activation; the personal key lets me run `sops secrets/secrets.yaml` as
+myself without sudo.
+
+The personal key cannot live inside the backups it protects. Keep it off
+this machine.
 
 `users.mutableUsers = false`; the password comes from
 `/run/secrets-for-users/coops-password`. `passwd` is therefore a no-op.
@@ -158,8 +206,9 @@ lanzaboote or `mutableUsers = false`.
 
 ## Next actions
 
-- [ ] Voice dictation (whisper), Omarchy-style.
-- [ ] Add a personal age key to `.sops.yaml` as a second recipient.
+- [ ] Enable versioning and object lock on the Exoscale bucket. Without them
+      this laptop holds credentials that can delete every snapshot.
+- [ ] Store `~/.config/sops/age/keys.txt` and the restic password off-machine.
 - [ ] Tighten DNS to `DNSSEC = "true"` / `DNSOverTLS = "true"` once
       opportunistic mode is proven on the networks I use.
 - [ ] lanzaboote: enrol keys with `sbctl` **before** enabling, TPM2

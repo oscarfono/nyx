@@ -44,9 +44,6 @@ in
       package = pkgs.gnome-themes-extra;
     };
 
-    # Papirus-Dark with amber folders, which is as close to the melancholy
-    # accent as a stock icon theme gets. tela-icon-theme is installed too if
-    # you prefer its rounder look: "Tela-dark" or "Tela-orange-dark".
     iconTheme = {
       name = "WhiteSur-dark";
       package = pkgs.whitesur-icon-theme;

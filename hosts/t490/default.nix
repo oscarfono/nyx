@@ -12,6 +12,7 @@
     ../../modules/security.nix
     ../../modules/bluetooth.nix
     ../../modules/gaming.nix
+    ../../modules/backup.nix
   ];
 
 
@@ -90,5 +91,51 @@
 
   # Do not change this after the first build. It is a compatibility marker,
   # not a version number.
+  # ---------------------------------------------------------------------
+  # Specialisations
+  # ---------------------------------------------------------------------
+  # Extra boot entries built from this same config with a few options
+  # changed. They cost nothing at runtime and cannot break the default
+  # entry, because the default is built and stored independently.
+  #
+  #   battery      long flight, no containers, everything throttled
+  #   performance  plugged in and doing real work
+  #
+  # Pick one from the boot menu. Nothing to configure at runtime.
+
+  specialisation.battery.configuration = {
+    system.nixos.tags = [ "battery" ];
+
+    services.tlp.settings = {
+      CPU_SCALING_GOVERNOR_ON_AC = lib.mkForce "powersave";
+      CPU_SCALING_GOVERNOR_ON_BAT = lib.mkForce "powersave";
+      CPU_ENERGY_PERF_POLICY_ON_BAT = lib.mkForce "power";
+      PLATFORM_PROFILE_ON_BAT = lib.mkForce "low-power";
+      USB_AUTOSUSPEND = lib.mkForce 1;
+      WIFI_PWR_ON_BAT = lib.mkForce "on";
+    };
+
+    # The two biggest idle drains that are not the screen.
+    virtualisation.docker.enable = lib.mkForce false;
+    virtualisation.libvirtd.enable = lib.mkForce false;
+    services.blueman.enable = lib.mkForce false;
+    hardware.bluetooth.powerOnBoot = lib.mkForce false;
+  };
+
+  specialisation.performance.configuration = {
+    system.nixos.tags = [ "performance" ];
+
+    services.tlp.settings = {
+      CPU_SCALING_GOVERNOR_ON_AC = lib.mkForce "performance";
+      CPU_SCALING_GOVERNOR_ON_BAT = lib.mkForce "performance";
+      CPU_ENERGY_PERF_POLICY_ON_AC = lib.mkForce "performance";
+      PLATFORM_PROFILE_ON_AC = lib.mkForce "performance";
+      # No charge thresholds: assume mains and get the full battery if
+      # unplugged mid-session.
+      START_CHARGE_THRESH_BAT0 = lib.mkForce 95;
+      STOP_CHARGE_THRESH_BAT0 = lib.mkForce 100;
+    };
+  };
+
   system.stateVersion = "26.05";
 }

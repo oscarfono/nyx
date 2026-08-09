@@ -81,7 +81,7 @@ in
     settings = {
       # Same wallpaper as the desktop, so login and session are continuous.
       background = {
-        path = ../assets/wallpapers/melancholy-dusk.png;
+        path = ../assets/wallpapers/dark-abstract.png;
         fit = "Cover";
       };
       commands = {

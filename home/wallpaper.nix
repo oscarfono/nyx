@@ -24,8 +24,10 @@
 
 let
   wallpapers = [
-    ../assets/wallpapers/melancholy-dusk.png
-    ../assets/wallpapers/melancholy-contour.png
+    ../assets/wallpapers/bull-bear.png
+    ../assets/wallpapers/dark-abstract.png
+    ../assets/wallpapers/earth-space.jpg
+    ../assets/wallpapers/full-moon-forest.jpg
   ];
 
   storePaths = map (w: "${w}") wallpapers;
