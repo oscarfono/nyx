@@ -9,17 +9,27 @@
 #   nyx-wallpaper pick   choose one from the menu picker
 #   nyx-wallpaper set X  set a specific path
 
-let
-  t = import ../lib/melancholy.nix;
+# Wallpaper. Images live in the repo under assets/wallpapers and are copied
+# into the store, so a fresh machine gets them with the rebuild.
+#
+# swaybg, not hyprpaper. hyprpaper kept reporting "Monitor eDP-1 has no
+# target" while its IPC rejected every request, which left no way to set or
+# query a wallpaper. swaybg has no IPC and no daemon protocol: it draws one
+# image and exits when told to. Changing wallpaper is therefore "write the
+# path, restart the unit", which cannot get into a half-configured state.
+#
+#   nyx-wallpaper next   cycle to the next image
+#   nyx-wallpaper pick   choose one from the menu picker
+#   nyx-wallpaper set X  set a specific path
 
+let
   wallpapers = [
     ../assets/wallpapers/melancholy-dusk.png
     ../assets/wallpapers/melancholy-contour.png
   ];
 
-  # Copy each into the store and keep the paths for the script.
   storePaths = map (w: "${w}") wallpapers;
-  pathList = lib.concatStringsSep "\n" storePaths;
+  first = builtins.elemAt storePaths 0;
 
   picker = "${pkgs.walker}/bin/walker --dmenu";
 
@@ -29,20 +39,15 @@ let
     mkdir -p "$STATE"
     CURRENT="$STATE/wallpaper"
 
-    apply() {
-      ${pkgs.hyprland}/bin/hyprctl hyprpaper preload "$1" >/dev/null
-      for m in $(${pkgs.hyprland}/bin/hyprctl monitors -j | ${pkgs.jq}/bin/jq -r '.[].name'); do
-        ${pkgs.hyprland}/bin/hyprctl hyprpaper wallpaper "$m,$1" >/dev/null
-      done
-      printf '%s\n' "$1" > "$CURRENT"
-    }
-
     list() { printf '%s\n' ${lib.escapeShellArgs storePaths}; }
+
+    apply() {
+      printf '%s\n' "$1" > "$CURRENT"
+      systemctl --user restart nyx-wallpaper.service
+    }
 
     case "''${1:-next}" in
       next)
-        # `A || B && C` in POSIX sh does not mean what it looks like, so the
-        # selection is written out explicitly.
         cur=$(cat "$CURRENT" 2>/dev/null || true)
         next=$(list | grep -A1 -x -F "$cur" 2>/dev/null | tail -1 || true)
         if [ -z "$next" ] || [ "$next" = "$cur" ]; then
@@ -57,25 +62,35 @@ let
       set)
         apply "$2"
         ;;
+      current)
+        cat "$CURRENT" 2>/dev/null || echo "${first}"
+        ;;
       *)
-        echo "usage: nyx-wallpaper [next|pick|set PATH]" >&2
+        echo "usage: nyx-wallpaper [next|pick|set PATH|current]" >&2
         exit 1
         ;;
     esac
   '';
 in
 {
-  home.packages = [ nyx-wallpaper pkgs.jq ];
+  home.packages = [ nyx-wallpaper pkgs.swaybg ];
 
-  # hyprpaper preloads both and sets the first at login. nyx-wallpaper takes
-  # over from there at runtime via hyprctl.
-  services.hyprpaper = {
-    enable = true;
-    settings = {
-      ipc = "on";
-      splash = false;
-      preload = storePaths;
-      wallpaper = [ ",${builtins.elemAt storePaths 0}" ];
+  systemd.user.services.nyx-wallpaper = {
+    Unit = {
+      Description = "Wallpaper (swaybg)";
+      PartOf = [ "graphical-session.target" ];
+      After = [ "graphical-session.target" ];
     };
+    Service = {
+      # Reads the state file each start, so nyx-wallpaper only has to write
+      # a path and restart this unit.
+      ExecStart = toString (pkgs.writeShellScript "nyx-wallpaper-start" ''
+        IMG=$(cat "''${XDG_STATE_HOME:-$HOME/.local/state}/nyx/wallpaper" 2>/dev/null || echo "${first}")
+        [ -f "$IMG" ] || IMG="${first}"
+        exec ${pkgs.swaybg}/bin/swaybg -m fill -i "$IMG"
+      '');
+      Restart = "on-failure";
+    };
+    Install.WantedBy = [ "graphical-session.target" ];
   };
 }

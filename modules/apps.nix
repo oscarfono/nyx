@@ -11,6 +11,11 @@
     builtins.elem (lib.getName pkg) [
       "brave"
       "claude-code"
+      # Steam and friends, enabled by modules/gaming.nix.
+      "steam"
+      "steam-unwrapped"
+      "steam-original"
+      "steam-run"
     ];
 
   environment.systemPackages = with pkgs; [
@@ -20,6 +25,10 @@
 
     # Credentials. KeePassXC with a local kdbx, no cloud vendor in the loop.
     keepassxc
+
+    # Calculator. qalculate handles units, currencies and expressions, not
+    # just arithmetic.
+    qalculate-gtk
 
     # Neovim is configured in home/default.nix.
 

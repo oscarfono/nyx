@@ -48,8 +48,8 @@ in
     # accent as a stock icon theme gets. tela-icon-theme is installed too if
     # you prefer its rounder look: "Tela-dark" or "Tela-orange-dark".
     iconTheme = {
-      name = "Papirus-Dark";
-      package = pkgs.papirus-icon-theme.override { color = "yellow"; };
+      name = "WhiteSur-dark";
+      package = pkgs.whitesur-icon-theme;
     };
 
     font = {
@@ -74,7 +74,9 @@ in
   dconf.settings."org/gnome/desktop/interface" = {
     color-scheme = "prefer-dark";
     gtk-theme = "Adwaita-dark";
-    icon-theme = "Papirus-Dark";
+    # Must match gtk.iconTheme.name above: home-manager's gtk3 module sets
+    # this same dconf key, and two different values is a hard conflict.
+    icon-theme = "WhiteSur-dark";
     cursor-theme = cursorTheme;
     cursor-size = cursorSize;
     font-name = "Raleway 11";

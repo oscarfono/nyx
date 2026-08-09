@@ -10,6 +10,8 @@
     ../../modules/emacs.nix
     ../../modules/devops.nix
     ../../modules/security.nix
+    ../../modules/bluetooth.nix
+    ../../modules/gaming.nix
   ];
 
 
@@ -82,7 +84,7 @@
     };
   };
 
-  time.timeZone = "Australia/Perth";
+  time.timeZone = "Australia/Melbourne";
   i18n.defaultLocale = "en_AU.UTF-8";
   console.keyMap = "us";
 

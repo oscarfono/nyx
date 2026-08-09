@@ -9,7 +9,7 @@
 # both. Do that BEFORE the new machine tries to build.
 
 keys:
-  - &beta REPLACE_WITH_AGE_PUBLIC_KEY
+  - &beta age1tdjjl0sd3326qrx2u58a77wy6g060z0xqj3gyenefyrfadjkgpzs3866fm
 
 creation_rules:
   - path_regex: secrets/[^/]+\.yaml$

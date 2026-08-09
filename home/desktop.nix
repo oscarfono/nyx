@@ -69,6 +69,9 @@ in
       ${luaBind "SUPER + B" (exec "brave")}
       ${luaBind "SUPER + SHIFT + B" (exec "firefox")}
       ${luaBind "SUPER + P" (exec "keepassxc")}
+      ${luaBind "SUPER + N" (exec "nautilus")}
+      ${luaBind "SUPER + C" (exec "qalculate-gtk")}
+      ${luaBind "SUPER + A" (exec "ghostty -e claude")}
       ${luaBind "SUPER + Space" (exec "fuzzel")}
       ${luaBind "SUPER + ALT + Space" (exec "nyx-menu-root")}
       ${luaBind "SUPER + K" (exec "ghostty -e less ${config.xdg.configHome}/nyx/keybinds.txt")}
@@ -133,6 +136,9 @@ in
       SUPER E             emacsclient
       SUPER B             brave            SUPER SHIFT B    firefox
       SUPER P             keepassxc
+    SUPER N             files (nautilus)
+    SUPER C             calculator
+    SUPER A             claude code
       SUPER Space         launcher (fuzzel)
       SUPER ALT Space     nyx menu
       SUPER K             this cheatsheet
