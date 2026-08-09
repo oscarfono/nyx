@@ -3,7 +3,7 @@
 # User layer. Everything here is Nyx's own.
 
 {
-  imports = [ ./emacs.nix ./desktop.nix ./menu.nix ./wallpaper.nix ];
+  imports = [ ./emacs.nix ./desktop.nix ./menu.nix ./wallpaper.nix ./tools.nix ];
 
   home.username = username;
   home.homeDirectory = "/home/${username}";
@@ -59,7 +59,7 @@
   programs.git = {
     enable = true;
     signing.signByDefault = true;
-    # signing.key = "5196AA7DFD93DC64";
+    # signing.key = "YOUR-GPG-KEY-ID";
 
     # home-manager moved git config under `settings` upstream. userName,
     # userEmail and extraConfig are all folded in here now.

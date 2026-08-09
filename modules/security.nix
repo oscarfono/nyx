@@ -108,19 +108,34 @@
     dns = "systemd-resolved";
   };
 
-  # resolved options moved under `settings.Resolve`, matching
-  # resolved.conf's own key names.
+  # DNS.
+  #
+  # Earlier this was DNSSEC="true" and DNSOverTLS="true", i.e. STRICT mode
+  # for both, with Quad9 only as *fallback*. That combination breaks
+  # resolution on most real networks: NetworkManager hands resolved the
+  # DHCP-provided ISP resolver, resolved then insists on DNS-over-TLS to a
+  # server that does not speak it, and every lookup fails. Fallback servers
+  # are only consulted when no other DNS is configured, so Quad9 never got a
+  # look in.
+  #
+  # Now: Quad9 is the configured DNS, not the fallback. `Domains = "~."`
+  # routes ALL queries there rather than to whatever DHCP offered, so the
+  # ISP resolver is never used. DNSOverTLS is opportunistic and DNSSEC is
+  # allow-downgrade, which still gets encryption and validation where the
+  # server supports it without hard-failing where it does not. Tighten to
+  # "true" once you have confirmed it works on the networks you use.
   services.resolved = {
     enable = true;
     settings.Resolve = {
+      DNS = "9.9.9.9#dns.quad9.net 149.112.112.112#dns.quad9.net 2620:fe::fe#dns.quad9.net";
+      FallbackDNS = "1.1.1.1#cloudflare-dns.com";
+      Domains = "~.";
       DNSSEC = "allow-downgrade";
       DNSOverTLS = "opportunistic";
-      DNS = [ "9.9.9.9#dns.quad9.net" "149.112.112.112#dns.quad9.net 2620:fe::fe#dns.quad9.net" ];
-      FallbackDNS = [ "1.1.1.1#cloudflare-dns.com" ];
-      Domains = "~.";
       Cache = "yes";
     };
   };
+
   # Quad9, not 8.8.8.8. No Google, including at layer 7.
 
   networking.firewall = {

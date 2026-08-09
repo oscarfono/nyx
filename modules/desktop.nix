@@ -67,12 +67,22 @@
     pavucontrol
     networkmanagerapplet
 
+    # Sharing. LocalSend is the AirDrop-alike: LAN only, no account.
+    localsend
+
     # Files and viewers
     nautilus
     imv
     mpv
     ghostty
   ];
+
+  # LocalSend listens on 53317 to receive. Opened deliberately and narrowly;
+  # everything else in modules/security.nix stays shut.
+  networking.firewall = {
+    allowedTCPPorts = [ 53317 ];
+    allowedUDPPorts = [ 53317 ];
+  };
 
   environment.sessionVariables = {
     NIXOS_OZONE_WL = "1";

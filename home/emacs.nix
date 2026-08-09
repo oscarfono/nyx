@@ -64,7 +64,21 @@ in
   # be before the bootstrap above has finished cloning, which gives you a
   # daemon running with no config until the next restart. Order it.
   systemd.user.services.emacs = {
-    Unit.After = [ "nyx-emacs-bootstrap.service" ];
+    Unit.After = [ "nyx-emacs-bootstrap.service" "graphical-session.target" ];
     Unit.Wants = [ "nyx-emacs-bootstrap.service" ];
+    Unit.PartOf = [ "graphical-session.target" ];
+
+    # The daemon inherits the systemd user environment, which does not
+    # automatically include the Wayland session. Without these it starts
+    # headless or falls back to XWayland, and emacsclient -c gives you a
+    # frame that cannot open files properly.
+    Service.Environment = [
+      "GDK_BACKEND=wayland"
+      "XDG_SESSION_TYPE=wayland"
+      "EGL_PLATFORM=wayland"
+    ];
+    Service.Restart = "on-failure";
+
+    Install.WantedBy = [ "graphical-session.target" ];
   };
 }

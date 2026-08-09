@@ -94,6 +94,17 @@ Menu sections: Style, Capture, Network, Nix, System, Session, Learn.
    evaluating the old state.
 7. Order the Emacs daemon after the bootstrap service, or it starts with no
    config on a fresh machine.
+8. **`FallbackDNS` is only consulted when no other DNS is configured.**
+   Putting Quad9 there while `DNSSEC`/`DNSOverTLS` were both strict meant
+   resolved insisted on DNS-over-TLS to the router's DHCP resolver and every
+   lookup failed. Quad9 belongs in `DNS` with `Domains = "~."`.
+9. **A running service predates the config that just replaced it.** hyprpaper
+   and resolved both looked broken when they were simply still running with
+   the previous generation's settings. `systemctl --user restart <unit>`, or
+   reboot, before debugging.
+10. Nix wants a semicolon after *every* attribute, including the last one in
+    a set. `syntax error, unexpected '}', expecting ';'` means look at the
+    line above.
 
 ## Errors found and fixed along the way
 
@@ -105,41 +116,76 @@ en_AU) · terraform BSL · `programs.git.userName/userEmail/extraConfig` →
 `programs.git.settings` · `services.logind.*` → `settings.Login.*` ·
 `services.resolved.*` → `settings.Resolve.*` · EDITOR defined twice ·
 hardcoded `/home/coops` path · POSIX `||`/`&&` precedence bug in the wallpaper
-cycler.
+cycler · DNS unusable from strict DNSSEC + strict DNSOverTLS against a
+DHCP-supplied resolver.
 
 ## Current state
 
-Builds and boots in a VM. Hyprland session, bar, launcher, menus and theming
-render. Not yet installed on hardware.
+**Installed and running on the T490s.** Hostname `beta`, user `sod`, built
+with `sudo nixos-rebuild switch --flake ~/Projects/nyx#beta`. The repo's
+`beta` entry uses `username = "sod"`; anyone else cloning it would change
+that one argument.
+
+Working: LUKS-encrypted root, greetd/tuigreet, Hyprland session, Waybar,
+fuzzel, mako, ghostty, zsh, Emacs with straight.el (`.emacs.d` cloned,
+straight seeded at the pinned commit), hyprpaper with the melancholy
+wallpapers, Quad9 DNS.
+
+Untested: suspend/resume, battery life over a real day, external displays,
+fingerprint reader, dock behaviour.
 
 ## Known gaps / next actions
 
-- [x] Username is a `mkHost` argument. `beta` uses `coops`; other hosts can differ.
-- [ ] `hosts/t490s/hardware-configuration.nix` is a stub with label-based
-      filesystem entries so evaluation works off-target. Regenerate on the
-      real machine with `nixos-generate-config`.
+- [x] Username is a `mkHost` argument. `beta` uses `sod` on my machine.
+- [x] straight.el pinned to `adb0fb37bc5fc298f5ed9f61447cfe379fff77ed`, so
+      early-init.el's `url-retrieve` of `install.el` never runs.
+- [x] `hardware-configuration.nix` regenerated on the real machine.
 - [ ] `users.mutableUsers = true` and sops is commented out. Staged: install,
       `passwd`, then sops, then flip to `false`.
 - [ ] lanzaboote wired but disabled. Enrol keys with `sbctl` **before**
       enabling, and TPM2 `systemd-cryptenroll` only **after** that (PCR 7
       binds to Secure Boot state).
 - [ ] `thunderbolt` is blacklisted in `security.nix` — remove if using a dock.
-- [ ] `mem_sleep_default=deep` needs the BIOS sleep state set to Linux. Verify
-      with `cat /sys/power/mem_sleep`.
-- [ ] Power, battery, suspend and wifi untested — a VM proves nothing here.
-- [ ] Wallpaper application unverified: check `hyprctl hyprpaper listloaded`.
+- [x] Deep sleep: `/sys/power/mem_sleep` reports `s2idle [deep]`, so S3 is
+      available and already default. The T490s BIOS has no Sleep State toggle
+      and does not need one.
+- [ ] Power, battery and suspend still untested in anger. Close the lid,
+      leave it overnight, check the drain.
+- [ ] Tighten DNS: `DNSSEC = "true"` and `DNSOverTLS = "true"` once I have
+      confirmed opportunistic mode works on the networks I actually use.
+- [ ] External displays, dock, fingerprint reader.
 - [ ] Not yet built: per-language editor setup, wallpaper picker with
       thumbnails, melancholy as a bat `.tmTheme`.
 
-## Install sequence
+## Daily use
 
-1. Boot NixOS ISO. Partition, LUKS the root, `mkfs`, mount.
+```bash
+cd ~/Projects/nyx
+$EDITOR modules/whatever.nix
+git add -A                      # flakes read the git INDEX, not the worktree
+sudo nixos-rebuild switch --flake .#beta
+```
+
+Rollback is `sudo nixos-rebuild switch --rollback`, or pick an older
+generation from the boot menu. Both are also in the `SUPER+ALT+Space` menu
+under Nix, alongside package search, `nix shell`, flake update, GC and a
+vulnix CVE scan.
+
+## Install sequence (for the next machine)
+
+The T490s is a SATA M.2, so `/dev/sda` with partitions `sda1`/`sda2` — no
+`p` separator. Check with `lsblk` rather than assuming.
+
+1. Boot NixOS ISO. Partition (1G ESP + LUKS container), `mkfs`, mount.
 2. `nixos-generate-config --root /mnt`, minimal `configuration.nix`
    (systemd-boot, NetworkManager, a wheel user, git), `nixos-install`, reboot.
 3. `git clone https://github.com/oscarfono/nyx.git ~/Projects/nyx`
-4. `sudo cp /etc/nixos/hardware-configuration.nix hosts/t490s/`
-5. `git add -A && nix flake check`
-6. `sudo nixos-rebuild build --flake .#beta` then `switch`.
+4. `sudo cp /etc/nixos/hardware-configuration.nix hosts/<host>/`
+5. Add a `mkHost` entry in `flake.nix` for the new machine.
+6. `git add -A && nix flake check`
+7. `sudo nixos-rebuild build --flake .#<host>` then `switch`.
+8. `passwd`, reboot, then check: `resolvectl query github.com`,
+   `systemctl --user status nyx-emacs-bootstrap hyprpaper`.
 
 Never change boot or crypto in the same generation as anything else. Old
 generations are in the boot menu; that safety net does not cover LUKS,

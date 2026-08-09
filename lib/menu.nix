@@ -25,8 +25,17 @@
       "  Region to clipboard" = { exec = "grim -g \"$(slurp)\" - | wl-copy"; };
       "  Region to editor"    = { exec = "grim -g \"$(slurp)\" - | satty -f -"; };
       "󰍹  Whole screen"        = { exec = "grim - | wl-copy"; };
-      "  Record region"       = { exec = "wf-recorder -g \"$(slurp)\" -f \"$HOME/Videos/rec-$(date +%s).mp4\""; };
-      "  Stop recording"      = { exec = "pkill -INT wf-recorder"; };
+      "  Record start/stop"   = { exec = "nyx-record"; };
+    };
+  };
+
+  "󱐋  Tools" = {
+    submenu = {
+      "󰀵  Claude"          = { exec = "ghostty -e claude"; };
+      "󰄄  Share a file"    = { exec = "localsend"; };
+      "󰅐  Set a reminder"  = { exec = "nyx-remind-prompt"; };
+      "󰕧  Record toggle"   = { exec = "nyx-record"; };
+      "󰅇  Clipboard history" = { exec = "sh -c 'cliphist list | walker --dmenu | cliphist decode | wl-copy'"; };
     };
   };
 
