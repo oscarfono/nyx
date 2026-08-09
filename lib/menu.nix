@@ -33,6 +33,7 @@
     submenu = {
       "󰀵  Claude"          = { exec = "ghostty -e claude"; };
       "󰄄  Share a file"    = { exec = "localsend"; };
+      "󰍬  Dictate"         = { exec = "nyx-dictate"; };
       "󰅐  Set a reminder"  = { exec = "nyx-remind-prompt"; };
       "󰕧  Record toggle"   = { exec = "nyx-record"; };
       "󰅇  Clipboard history" = { exec = "sh -c 'cliphist list | walker --dmenu | cliphist decode | wl-copy'"; };

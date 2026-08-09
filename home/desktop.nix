@@ -69,6 +69,7 @@ in
       ${luaBind "SUPER + N" (exec "nautilus")}
       ${luaBind "SUPER + C" (exec "qalculate-gtk")}
       ${luaBind "SUPER + A" (exec "ghostty -e claude")}
+      ${luaBind "SUPER + D" (exec "nyx-dictate")}
       ${luaBind "SUPER + Space" (exec "fuzzel")}
       ${luaBind "SUPER + ALT + Space" (exec "nyx-menu-root")}
       ${luaBind "SUPER + K" (exec "ghostty -e less ${config.xdg.configHome}/nyx/keybinds.txt")}
@@ -136,6 +137,7 @@ in
     SUPER N             files (nautilus)
     SUPER C             calculator
     SUPER A             claude code
+    SUPER D             dictation toggle
       SUPER Space         launcher (fuzzel)
       SUPER ALT Space     nyx menu
       SUPER K             this cheatsheet
@@ -171,40 +173,158 @@ in
     settings.mainBar = {
       layer = "top";
       position = "top";
-      height = 30;
-      modules-left = [ "hyprland/workspaces" ];
-      modules-center = [ "clock" ];
-      modules-right = [ "pulseaudio" "backlight" "battery" "network" "tray" ];
+      height = 34;
+      spacing = 0;
 
-      clock.format = "{:%a %d %b  %H:%M}";
+      modules-left = [ "hyprland/workspaces" "hyprland/window" ];
+      modules-center = [ "clock" ];
+      modules-right = [
+        "pulseaudio" "backlight" "battery"
+        "bluetooth" "network" "tray"
+      ];
+
+      "hyprland/workspaces" = {
+        format = "{name}";
+        on-click = "activate";
+      };
+
+      "hyprland/window" = {
+        format = "{title}";
+        max-length = 48;
+        separate-outputs = true;
+      };
+
+      clock = {
+        format = "{:%a %d %b  %H:%M}";
+        tooltip-format = "<tt>{calendar}</tt>";
+        calendar.mode = "month";
+      };
+
+      # Every module below says what it is. A bare "40%" tells you nothing.
+      pulseaudio = {
+        format = "{icon} {volume}%";
+        format-muted = "󰝟 muted";
+        format-icons.default = [ "󰕿" "󰖀" "󰕾" ];
+        tooltip-format = "{desc} at {volume}%";
+        on-click = "pavucontrol";
+        on-scroll-up = "swayosd-client --output-volume raise";
+        on-scroll-down = "swayosd-client --output-volume lower";
+      };
+
+      backlight = {
+        format = "{icon} {percent}%";
+        format-icons = [ "󰃞" "󰃟" "󰃠" ];
+        tooltip-format = "Screen brightness {percent}%";
+        on-scroll-up = "swayosd-client --brightness raise";
+        on-scroll-down = "swayosd-client --brightness lower";
+      };
+
       battery = {
         format = "{icon} {capacity}%";
-        format-icons = [ "" "" "" "" "" ];
-        states = { warning = 30; critical = 15; };
+        format-charging = "󰂄 {capacity}%";
+        format-plugged = "󰚥 {capacity}%";
+        format-icons = [ "󰁺" "󰁼" "󰁾" "󰂀" "󰂂" ];
+        # The number people actually want is time left, not percent.
+        tooltip-format = "{timeTo}  ({power}W)";
+        states = { warning = 25; critical = 12; };
+        interval = 30;
       };
-      network.format-wifi = "  {essid}";
-      pulseaudio.format = "  {volume}%";
-      backlight.format = "  {percent}%";
+
+      bluetooth = {
+        format = "󰂯";
+        format-disabled = "";
+        format-connected = "󰂱 {device_alias}";
+        tooltip-format-connected = "{device_enumerate}";
+        on-click = "blueman-manager";
+      };
+
+      network = {
+        format-wifi = "󰤨 {essid}";
+        format-ethernet = "󰈀 wired";
+        format-disconnected = "󰤭 offline";
+        tooltip-format-wifi = "{essid}  {signalStrength}%  {ipaddr}";
+        tooltip-format-ethernet = "{ifname}  {ipaddr}";
+        on-click = "ghostty -e nmtui";
+      };
+
+      tray = {
+        spacing = 8;
+        icon-size = 16;
+      };
     };
 
+    # Right-hand modules sit in one rounded group with even padding, rather
+    # than a run of unlabelled numbers jammed against the screen edge.
     style = ''
       * {
         font-family: "CommitMono Nerd Font Mono", monospace;
         font-size: 12px;
+        min-height: 0;
       }
+
       window#waybar {
         background: ${t.bg};
         color: ${t.fg};
-        border-bottom: 2px solid ${t.bgSubtle};
+        border-bottom: 1px solid ${t.bgSubtle};
       }
-      #workspaces button          { color: ${t.fgMuted}; padding: 0 8px; }
-      #workspaces button.active   { color: ${t.amber}; }
-      #workspaces button.urgent   { color: ${t.red}; }
-      #clock                      { color: ${t.cyan}; }
-      #battery                    { color: ${t.green}; }
-      #battery.warning            { color: ${t.amber}; }
-      #battery.critical           { color: ${t.red}; }
-      #network, #pulseaudio, #backlight { color: ${t.fg}; padding: 0 8px; }
+
+      #workspaces {
+        margin: 4px 0 4px 8px;
+      }
+      #workspaces button {
+        color: ${t.fgMuted};
+        padding: 0 8px;
+        border-radius: 4px;
+        background: transparent;
+      }
+      #workspaces button.active {
+        color: ${t.bg};
+        background: ${t.amber};
+      }
+      #workspaces button.urgent { color: ${t.red}; }
+      #workspaces button:hover  { color: ${t.fg}; background: ${t.bgSubtle}; }
+
+      #window {
+        color: ${t.fgMuted};
+        margin-left: 10px;
+      }
+      window#waybar.empty #window { background: transparent; }
+
+      #clock {
+        color: ${t.fg};
+        font-weight: bold;
+      }
+
+      /* One pill for the status cluster. */
+      #pulseaudio, #backlight, #battery, #bluetooth, #network {
+        background: ${t.bgSubtle};
+        padding: 0 10px;
+        margin: 5px 0;
+      }
+      #pulseaudio { border-radius: 6px 0 0 6px; margin-left: 8px; }
+      #network    { border-radius: 0 6px 6px 0; }
+
+      #pulseaudio { color: ${t.cyan}; }
+      #backlight  { color: ${t.fg}; }
+      #battery    { color: ${t.green}; }
+      #bluetooth  { color: ${t.cyan}; }
+      #network    { color: ${t.fg}; }
+
+      #battery.warning  { color: ${t.amber}; }
+      #battery.critical { color: ${t.bg}; background: ${t.red}; }
+      #battery.charging { color: ${t.green}; }
+
+      #tray {
+        padding: 0 10px 0 12px;
+        margin-right: 4px;
+      }
+
+      tooltip {
+        background: ${t.bg};
+        border: 1px solid ${t.amber};
+        border-radius: 6px;
+      }
+      tooltip label { color: ${t.fg}; padding: 4px; }
     '';
   };
 
