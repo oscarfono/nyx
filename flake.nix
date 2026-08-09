@@ -97,12 +97,12 @@
         beta = mkHost {
           hostName = "beta";
           username = "coops";
-          hardware = nixos-hardware.nixosModules.lenovo-thinkpad-t490s;
-          hostPath = ./hosts/t490s;
+          hardware = nixos-hardware.nixosModules.lenovo-thinkpad-t490;
+          hostPath = ./hosts/t490;
           modules = desktopModules;
         };
 
-        # Adding a machine looks like this. Copy hosts/t490s to hosts/<name>,
+        # Adding a machine looks like this. Copy hosts/t490 to hosts/<name>,
         # regenerate hardware-configuration.nix on that machine, and drop or
         # add modules to taste.
         #

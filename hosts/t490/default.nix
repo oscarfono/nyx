@@ -19,7 +19,7 @@
   boot.loader.systemd-boot.configurationLimit = 10;
   boot.loader.efi.canTouchEfiVariables = true;
 
-  # T490s specifics. The nixos-hardware module handles most of it, this is
+  # T490 specifics. The nixos-hardware module handles most of it, this is
   # the extra that is worth having on this chassis.
   services.thermald.enable = true;
   services.fwupd.enable = true;

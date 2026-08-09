@@ -1,6 +1,6 @@
 { config, pkgs, lib, ... }:
 
-# Power, battery and suspend for the T490s.
+# Power, battery and suspend for the T490.
 #
 # The Hyprland ports floating around are desktop-first and largely ignore
 # laptops. This module is where Nyx earns its keep on a ThinkPad.
@@ -9,7 +9,7 @@
   # ---------------------------------------------------------------------
   # Suspend
   # ---------------------------------------------------------------------
-  # The T490s supports S3 ("deep") as well as s2idle. s2idle on this
+  # The T490 supports S3 ("deep") as well as s2idle. s2idle on this
   # generation drains noticeably in a bag overnight. Force deep sleep.
   #
   # If the BIOS is set to "Windows" sleep mode, deep is unavailable. Check
@@ -35,7 +35,7 @@
   # ---------------------------------------------------------------------
   # Battery
   # ---------------------------------------------------------------------
-  # TLP is configured in hosts/t490s/default.nix with charge thresholds.
+  # TLP is configured in hosts/t490/default.nix with charge thresholds.
   # These are the extras that matter on this chassis.
   services.upower.enable = true;
   powerManagement.enable = true;

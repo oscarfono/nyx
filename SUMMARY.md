@@ -5,7 +5,7 @@ Paste this into a new session to pick up where the last one left off.
 ## What Nyx is
 
 **Nyx** ("Not Your X") is my standalone, security-first NixOS desktop config
-for a Lenovo ThinkPad T490s, hostname `beta`. It takes the *idea* of DHH's
+for a Lenovo ThinkPad T490, hostname `beta`. It takes the *idea* of DHH's
 Omarchy (opinionated, keyboard-driven Hyprland desktop) and rebuilds it the
 way NixOS wants it built: declarative modules, no install scripts, no runtime
 mutation.
@@ -54,14 +54,14 @@ modules/apps.nix       Brave (+managed policy), Firefox, KeePassXC, Claude Code
 modules/emacs.nix      Emacs binary + native-comp toolchain (no elisp)
 modules/devops.nix     containers, k8s, IaC, secrets, network tools, nix settings
 modules/security.nix   hardening, DNS, firewall, audit, Secure Boot (opt-in)
-modules/power.nix      T490s power, battery, suspend
+modules/power.nix      T490 power, battery, suspend
 modules/fonts.nix      CommitMono, Raleway, Caveat
 home/default.nix       identity, zsh, git, neovim, tmpfiles
 home/desktop.nix       hyprland.conf, waybar, mako, fuzzel, hyprlock, hypridle, ghostty
 home/menu.nix          renders lib/menu.nix into dispatch scripts
 home/wallpaper.nix     hyprpaper + generated `nyx-wallpaper` script
 home/emacs.nix         .emacs.d + straight.el bootstrap (user service)
-hosts/t490s/           hardware profile, host settings, VM variant
+hosts/t490/           hardware profile, host settings, VM variant
 ```
 
 ## Keybindings
@@ -121,7 +121,7 @@ DHCP-supplied resolver.
 
 ## Current state
 
-**Installed and running on the T490s.** Hostname `beta`, user `sod`, built
+**Installed and running on the T490.** Hostname `beta`, user `sod`, built
 with `sudo nixos-rebuild switch --flake ~/Projects/nyx#beta`. The repo's
 `beta` entry uses `username = "sod"`; anyone else cloning it would change
 that one argument.
@@ -147,7 +147,7 @@ fingerprint reader, dock behaviour.
       binds to Secure Boot state).
 - [ ] `thunderbolt` is blacklisted in `security.nix` — remove if using a dock.
 - [x] Deep sleep: `/sys/power/mem_sleep` reports `s2idle [deep]`, so S3 is
-      available and already default. The T490s BIOS has no Sleep State toggle
+      available and already default. The T490 BIOS has no Sleep State toggle
       and does not need one.
 - [ ] Power, battery and suspend still untested in anger. Close the lid,
       leave it overnight, check the drain.
@@ -173,7 +173,7 @@ vulnix CVE scan.
 
 ## Install sequence (for the next machine)
 
-The T490s is a SATA M.2, so `/dev/sda` with partitions `sda1`/`sda2` — no
+The T490 is a SATA M.2, so `/dev/sda` with partitions `sda1`/`sda2` — no
 `p` separator. Check with `lsblk` rather than assuming.
 
 1. Boot NixOS ISO. Partition (1G ESP + LUKS container), `mkfs`, mount.

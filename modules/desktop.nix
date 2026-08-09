@@ -66,7 +66,7 @@
   # ---------------------------------------------------------------------
   # Mobile broadband (WWAN)
   # ---------------------------------------------------------------------
-  # The T490s has an M.2 WWAN slot and a SIM tray, but the modem card is a
+  # The T490 has an M.2 WWAN slot and a SIM tray, but the modem card is a
   # build-time option and many units ship without it. Harmless if absent:
   # ModemManager simply finds no device. See SUMMARY.md for how to check.
   networking.networkmanager.plugins = with pkgs; [

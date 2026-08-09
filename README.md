@@ -8,7 +8,7 @@ worth having. Nyx takes that idea and rebuilds it the way NixOS wants it
 built: declarative modules, no install scripts, no runtime mutation, and a
 security posture that is written down rather than assumed.
 
-Target: Lenovo ThinkPad T490s (hostname `beta`).
+Target: Lenovo ThinkPad T490 (hostname `beta`).
 
 ## Layout
 
@@ -23,10 +23,10 @@ modules/apps.nix       Brave, Firefox, KeePassXC, Claude Code
 modules/emacs.nix      Emacs + straight.el toolchain
 modules/devops.nix     containers, k8s, IaC, secrets, network tooling
 modules/security.nix   hardening, DNS, firewall, audit, Secure Boot (opt-in)
-modules/power.nix      T490s power, battery, suspend
+modules/power.nix      T490 power, battery, suspend
 modules/fonts.nix      CommitMono, Raleway, Caveat
 home/                  user layer: desktop theming, menus, shell, git, Emacs
-hosts/t490s/           hardware profile and host settings
+hosts/t490/           hardware profile and host settings
 ```
 
 ## Prior art
@@ -59,7 +59,7 @@ Studied, not depended on:
 ## First build
 
 ```bash
-sudo nixos-generate-config --show-hardware-config > hosts/t490s/hardware-configuration.nix
+sudo nixos-generate-config --show-hardware-config > hosts/t490/hardware-configuration.nix
 git add -A                       # flakes read from the git index
 nix flake check
 sudo nixos-rebuild build --flake .#beta
