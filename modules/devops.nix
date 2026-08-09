@@ -55,7 +55,7 @@
     ssh-to-age
     gnupg
     yubikey-manager
-    pinentry-curses
+    pinentry-gnome3
 
     # Network and inspection
     nmap
@@ -102,7 +102,10 @@
   programs.gnupg.agent = {
     enable = true;
     enableSSHSupport = true;
-    pinentryPackage = pkgs.pinentry-curses;
+    # NOT pinentry-curses. The Emacs daemon has no terminal, so a curses
+    # prompt has nowhere to draw and the passphrase request hangs forever,
+    # which looks exactly like the daemon failing to start.
+    pinentryPackage = pkgs.pinentry-gnome3;
   };
 
   # YubiKey / smartcard support, since GPG and FIDO2 both want it.

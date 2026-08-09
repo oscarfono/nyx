@@ -87,5 +87,11 @@ in
       XDG_SESSION_TYPE = "wayland";
       EGL_PLATFORM = "wayland";
     };
+
+    # straight.el clones and byte-compiles every package on first run, which
+    # takes far longer than systemd's default 90s start timeout. Without
+    # this the daemon is killed mid-compile, restarted, and killed again,
+    # burning CPU forever and never coming up.
+    serviceConfig.TimeoutStartSec = "10min";
   };
 }
