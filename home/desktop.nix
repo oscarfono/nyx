@@ -83,6 +83,9 @@ in
           blur = { enabled = false },
         },
         animations = { enabled = true },
+        cursor = {
+          no_hardware_cursors = false,
+        },
         input = {
           kb_layout = "us",
           follow_mouse = 1,
@@ -91,7 +94,7 @@ in
       })
 
       -- Applications
-      ${luaBind "SUPER + Return" (exec "ghostty")}
+      ${luaBind "SUPER + T" (exec "ghostty")}
       ${luaBind "SUPER + E" (exec "emacsclient -c -a emacs")}
       ${luaBind "SUPER + B" (exec "brave")}
       ${luaBind "SUPER + SHIFT + B" (exec "firefox")}
@@ -104,7 +107,29 @@ in
       -- Window management
       ${luaBind "SUPER + Q" "hl.dsp.window.close()"}
       ${luaBind "SUPER + V" ''hl.dsp.window.float({ action = "toggle" })''}
-      ${luaBind "SUPER + F" ''hl.dsp.window.fullscreen({ action = "toggle" })''}
+
+      -- SUPER+Return: maximise. Full width and height of the usable area,
+      -- so Waybar stays visible. That is fullscreen mode 1 in Hyprland
+      -- terms; mode 0 is true fullscreen and covers the bar.
+      ${luaBind "SUPER + Return" ''hl.dsp.window.fullscreen({ mode = 1 })''}
+      ${luaBind "SUPER + F" ''hl.dsp.window.fullscreen({ mode = 0 })''}
+
+      -- Focus with SUPER + arrows, move the window with SUPER + SHIFT.
+      ${luaBind "SUPER + left" ''hl.dsp.focus({ direction = "l" })''}
+      ${luaBind "SUPER + right" ''hl.dsp.focus({ direction = "r" })''}
+      ${luaBind "SUPER + up" ''hl.dsp.focus({ direction = "u" })''}
+      ${luaBind "SUPER + down" ''hl.dsp.focus({ direction = "d" })''}
+
+      ${luaBind "SUPER + SHIFT + left" ''hl.dsp.window.move({ direction = "l" })''}
+      ${luaBind "SUPER + SHIFT + right" ''hl.dsp.window.move({ direction = "r" })''}
+      ${luaBind "SUPER + SHIFT + up" ''hl.dsp.window.move({ direction = "u" })''}
+      ${luaBind "SUPER + SHIFT + down" ''hl.dsp.window.move({ direction = "d" })''}
+
+      -- Resize, since arrows are now the spatial keys.
+      ${luaBind "SUPER + CTRL + left" ''hl.dsp.window.resize({ x = -60, y = 0 })''}
+      ${luaBind "SUPER + CTRL + right" ''hl.dsp.window.resize({ x = 60, y = 0 })''}
+      ${luaBind "SUPER + CTRL + up" ''hl.dsp.window.resize({ x = 0, y = -60 })''}
+      ${luaBind "SUPER + CTRL + down" ''hl.dsp.window.resize({ x = 0, y = 60 })''}
 
       -- Workspaces
       for i = 1, 9 do
@@ -133,20 +158,35 @@ in
   xdg.configFile."nyx/keybinds.txt".text = ''
     Nyx keybindings
 
-    SUPER Return        terminal (ghostty)
-    SUPER E             emacsclient
-    SUPER B             brave          SUPER SHIFT B   firefox
-    SUPER P             keepassxc
-    SUPER Space         launcher (fuzzel)
-    SUPER ALT Space     nyx menu
-    SUPER K             this cheatsheet
-    SUPER Q             close window
-    SUPER F             fullscreen     SUPER V         float
-    SUPER SHIFT L       lock
-    SUPER 1-9           workspace      SUPER SHIFT 1-9 move to workspace
-    Print               region to clipboard
-    SHIFT Print         region to satty
-    SUPER SHIFT R       record region to ~/Videos
+    LAUNCH
+      SUPER T             terminal (ghostty)
+      SUPER E             emacsclient
+      SUPER B             brave            SUPER SHIFT B    firefox
+      SUPER P             keepassxc
+      SUPER Space         launcher (fuzzel)
+      SUPER ALT Space     nyx menu
+      SUPER K             this cheatsheet
+
+    WINDOWS
+      SUPER Return        maximise (keeps the bar visible)
+      SUPER F             true fullscreen
+      SUPER Q             close
+      SUPER V             float
+      SUPER arrows        move focus
+      SUPER SHIFT arrows  move window
+      SUPER CTRL arrows   resize
+
+    WORKSPACES
+      SUPER 1-9           switch
+      SUPER SHIFT 1-9     move window to
+
+    CAPTURE
+      Print               region to clipboard
+      SHIFT Print         region to satty
+      SUPER SHIFT R       record start/stop
+
+    SESSION
+      SUPER SHIFT L       lock
   '';
 
   # -------------------------------------------------------------------

@@ -3,7 +3,7 @@
 # User layer. Everything here is Nyx's own.
 
 {
-  imports = [ ./emacs.nix ./desktop.nix ./menu.nix ./wallpaper.nix ./tools.nix ];
+  imports = [ ./emacs.nix ./desktop.nix ./menu.nix ./wallpaper.nix ./tools.nix ./theme.nix ];
 
   home.username = username;
   home.homeDirectory = "/home/${username}";
