@@ -1,31 +1,52 @@
 { config, pkgs, lib, ... }:
 
-# Fonts. melancholy specifies a preferred chain, so it is declared here
-# rather than left to whatever the desktop layer happens to ship.
-#   Mono    CommitMono Nerd Font Mono, falling back to JetBrains Mono, Hack
-#   Sans    Raleway, falling back to Inter
-#   Cursive Caveat
+# Fonts.
+#
+# The melancholy chain:
+#   Mono     CommitMono Nerd Font Mono, then JetBrains Mono, then Hack
+#   Sans     Raleway, then Inter
+#   Cursive  Caveat
+#
+# The Nerd Font variants are patched with the glyphs Waybar, the menus and
+# the shell prompt use. Plain CommitMono would render those as boxes.
 
 {
   fonts = {
     packages = with pkgs; [
+      # Mono, patched
       nerd-fonts.commit-mono
       nerd-fonts.jetbrains-mono
-      nerd-fonts.symbols-only
+      nerd-fonts.hack
+      nerd-fonts.symbols-only     # glyph fallback for anything unpatched
+
+      # Mono, unpatched originals for anything that dislikes the patched
+      # metrics (some PDF and print workflows do).
+      commit-mono
+      jetbrains-mono
       hack-font
+
+      # Sans
       raleway
-      google-fonts          # carries Caveat. Large. Swap for a narrower
-                            # package if closure size starts to annoy you.
+      inter
+
+      # Cursive. google-fonts is ~2GB unfiltered, so take just this one.
+      (google-fonts.override { fonts = [ "Caveat" ]; })
+
+      # Coverage for everything else
       noto-fonts
+      noto-fonts-cjk-sans
       noto-fonts-color-emoji
       liberation_ttf
     ];
 
-    fontconfig.defaultFonts = {
-      monospace = [ "CommitMono Nerd Font Mono" "JetBrainsMono Nerd Font" "Hack" ];
-      sansSerif = [ "Raleway" "Inter" "Noto Sans" ];
-      serif     = [ "Noto Serif" ];
-      emoji     = [ "Noto Color Emoji" ];
+    fontconfig = {
+      enable = true;
+      defaultFonts = {
+        monospace = [ "CommitMono Nerd Font Mono" "JetBrainsMono Nerd Font" "Hack Nerd Font" ];
+        sansSerif = [ "Raleway" "Inter" "Noto Sans" ];
+        serif = [ "Noto Serif" "Liberation Serif" ];
+        emoji = [ "Noto Color Emoji" ];
+      };
     };
   };
 }

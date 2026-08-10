@@ -3,32 +3,27 @@
 ## What Nyx is
 
 **Nyx** ("Not Your X") is my standalone, security-first NixOS desktop config
-for a Lenovo ThinkPad T490, hostname `beta`, user `coops`. It takes the *idea*
-of DHH's Omarchy (opinionated, keyboard-driven Hyprland desktop) and rebuilds
-it the way NixOS wants it built: declarative modules, no install scripts, no
-runtime mutation.
+for a Lenovo ThinkPad T490, hostname `beta`, user `coops`. It takes the
+*idea* of Omarchy and rebuilds it the way NixOS wants it built: declarative
+modules, no install scripts, no runtime mutation.
 
-It is **not** a wrapper around `henrysipp/omarchy-nix` or `T00fy/omanix`.
-Both were studied; neither is a dependency.
+It is not a wrapper around anyone else's config. Repo:
+`github.com/oscarfono/nyx`. Working copy: `~/Projects/nyx`.
 
-Repo: `github.com/oscarfono/nyx` (public). Working copy: `~/Projects/nyx`.
+Layout is in README.md. How to do things is in CHEATSHEET.md. Workarounds
+and when to retest them are in KNOWN-ISSUES.md. This file is state,
+decisions and lessons.
 
 ## Status: installed and working
 
-LUKS-encrypted root · greetd/regreet · plymouth boot · Hyprland (Lua config)
-· Waybar · fuzzel · walker menus · mako · ghostty · zsh · Emacs daemon with
-straight.el · swaybg wallpapers · Quad9 DNS over TLS · sops-nix secrets with
-declarative passwords · Bluetooth · Steam · tree-sitter grammars · voice
-dictation (whisper.cpp, local) · restic backups to Exoscale · nh/comma
-tooling · battery and performance specialisations · Secure Boot enforcing
-with my own keys via lanzaboote · web apps as launcher entries · window
-rules · caffeine toggle · `nyx-doctor` health check · terminal output
-coloured from the palette.
+LUKS root · Secure Boot enforcing with my own keys · sops-nix secrets with
+declarative passwords · restic to Exoscale, daily · Hyprland (Lua config) ·
+Waybar · fuzzel · walker menus · Ghostty · zsh · Emacs daemon with
+straight.el · swaybg · Quad9 DNS · Bluetooth · Steam · voice dictation ·
+secops toolkit with metasploit on local postgres · `nyx-doctor`.
 
 **Suspend measured:** 85% → 79% over 8h26m in S3, about 0.7%/hour. Roughly
-six days suspended on a full charge. Clean resume, wifi survived, no wake
-events. 85% is the TLP charge ceiling, so that was full by this machine's
-definition.
+six days suspended on a full charge. Clean resume, wifi survived.
 
 Untested: external displays, dock, fingerprint reader.
 
@@ -36,293 +31,138 @@ Untested: external displays, dock, fingerprint reader.
 
 | Decision | Reasoning |
 |---|---|
-| Flake + config repo, **no ISO** | The installer was 80% of the work for 20% of the value. |
+| Flake and config repo, no ISO | The installer was 80% of the work for 20% of the value. |
 | `nixos-unstable` | Hyprland and desktop tooling move fast. |
-| Emacs default editor, straight.el | Nix owns the binary and toolchain; straight owns all elisp. Two package managers on one load-path is the failure mode. |
-| Brave default, Firefox alongside | Chromium engine accepted knowingly; de-Googling here is about services, not the engine. Locked down via managed policy JSON. |
-| KeePassXC, local kdbx | No cloud password vendor. |
+| Emacs with straight.el | Nix owns the binary and toolchain; straight owns all elisp. Two package managers on one load-path is the failure mode. |
+| Brave default, Firefox alongside | Chromium engine accepted knowingly; de-Googling here is about services, not the engine. Locked down via managed policy. |
 | Hyprland config as **Lua**, hand-generated | hyprlang is deprecated as of 0.55 and goes away in 0.57. home-manager's serialiser emits invalid Lua, so we write it ourselves from Nix data. |
-| Every bind wrapped in `pcall` | A Lua error before the binds means NO binds and emergency mode. `pcall` costs one bind instead of the session. |
+| Every Lua bind in `pcall` | An error before the binds means NO binds and emergency mode. `pcall` costs one bind instead of the session. |
 | swaybg, not hyprpaper | hyprpaper reported "monitor has no target" while its IPC rejected every request. swaybg has no IPC: write path, restart unit. |
-| Fuzzel for apps, Walker for menus | Walker `--dmenu` drives the generated menu tree. |
-| melancholy everywhere | `lib/melancholy.nix` is the single source of colour truth. |
+| Native postgres for metasploit, not a container | On a declarative system the isolation argument evaporates: service, database, user and permissions are all in one file. A container would add an image to pin and a volume to back up separately. |
+| Tray applets for wifi and bluetooth, no Waybar modules | One indicator per thing. The applets carry state *and* a click menu; the modules only carried state. |
 | opentofu, not terraform | Terraform is BSL 1.1. `terraform=tofu` alias covers muscle memory. |
-| Unfree allow-listed per package | One list, in `apps.nix`. It doubles as the inventory. |
-
-## Layout
-
-```
-flake.nix              inputs, mkHost, the `beta` output
-.sops.yaml             age recipients. &beta is the HOST ssh key.
-secrets/secrets.yaml   encrypted. Contains coops-password (yescrypt).
-lib/melancholy.nix     the palette (bg #2A2A2A, fg #DEDEDE, amber #FFB728)
-lib/menu.nix           menu tree as data
-modules/desktop.nix    Hyprland, greetd/regreet, plymouth, pipewire, capture
-modules/apps.nix       Brave, Firefox, KeePassXC, Claude Code, unfree list
-modules/emacs.nix      Emacs binary + native-comp toolchain (no elisp)
-modules/devops.nix     containers, k8s, IaC, network tools, nix settings
-modules/security.nix   hardening, DNS, firewall, audit, Secure Boot (opt-in)
-modules/secrets.nix    sops-nix, declarative user passwords
-modules/power.nix      power, battery, deep sleep
-modules/bluetooth.nix  bluez, blueman, A2DP codec preferences
-modules/backup.nix     restic to Exoscale SOS, daily timer
-modules/gaming.nix     Steam, gamemode, protontricks
-modules/fonts.nix      CommitMono, Raleway, Caveat
-home/desktop.nix       hyprland.lua, waybar, mako, fuzzel, hyprlock, ghostty
-home/theme.nix         GTK/Qt dark, WhiteSur icons, Bibata cursors
-home/menu.nix          renders lib/menu.nix into dispatch scripts
-home/wallpaper.nix     swaybg unit + nyx-wallpaper script
-home/tools.nix         nyx-shot, nyx-record, nyx-remind
-home/emacs.nix         .emacs.d clone + straight seed (user service)
-home/treesitter.nix    prebuilt grammars into ~/.emacs.d/tree-sitter
-home/dictation.nix     whisper.cpp, SUPER+D toggle
-home/xdg.nix           default applications
-home/colours.nix       LS_COLORS, zsh highlighting, less/man, ripgrep, fzf
-home/webapps.nix       renders lib/webapps.nix into desktop entries
-lib/webapps.nix        web apps as data
-home/agents.nix        agent tooling
-hosts/t490/            hardware profile, host settings
-```
+| Unfree allow-listed per package | One list, in `apps.nix`. It doubles as the inventory: brave, claude-code, steam, burpsuite. |
+| Personal shell functions outside the repo | `~/.config/zsh/local/*.zsh`, sourced but unmanaged. Backed up by restic, since nothing else has them. |
 
 ## Multiple machines
 
 `flake.nix` defines `mkHost`. A new machine is an entry in
-`nixosConfigurations`, not a fork. `hostName`, `username`, `hardware`,
-`hostPath` and the module list are all arguments.
+`nixosConfigurations`, not a fork: `hostName`, `username`, `hardware`,
+`hostPath` and the module list are all arguments. Untested — there is only
+one machine so far.
 
 ## Keybindings
 
-`SUPER+Return` terminal · `SUPER+E` Emacs · `SUPER+B` Brave ·
-`SUPER+SHIFT+B` Firefox · `SUPER+P` KeePassXC · `SUPER+N` files ·
-`SUPER+C` calculator · `SUPER+A` Claude Code · `SUPER+Space` launcher ·
+`SUPER+T` terminal · `SUPER+E` Emacs · `SUPER+B` Brave · `SUPER+SHIFT+B`
+Firefox · `SUPER+P` KeePassXC · `SUPER+N` files · `SUPER+C` calculator ·
+`SUPER+A` Claude Code · `SUPER+D` dictation · `SUPER+Space` launcher ·
 `SUPER+ALT+Space` menu · `SUPER+K` cheatsheet · `SUPER+Q` close ·
-`SUPER+F` fullscreen · `SUPER+V` float · `SUPER+CTRL+arrows` resize ·
-`SUPER+D` dictation · `SUPER+SHIFT+L` lock · `SUPER+1-9` workspaces ·
-`Print` region to clipboard ·
-`SHIFT+Print` to satty · `SUPER+SHIFT+R` record toggle.
+`SUPER+Return` maximise · `SUPER+F` fullscreen · `SUPER+V` float ·
+`SUPER+arrows` focus · `SUPER+SHIFT+arrows` move · `SUPER+CTRL+arrows`
+resize · `SUPER+1-9` workspaces · `SUPER+SHIFT+C` caffeine ·
+`SUPER+SHIFT+L` lock · `Print` region · `SHIFT+Print` to satty ·
+`SUPER+Print` window · `CTRL+Print` screen · `SUPER+SHIFT+S` save ·
+`SUPER+SHIFT+R` record.
 
 Menu sections: Style, Capture, Tools, Network, Nix, System, Session, Learn.
 
-## Commands worth knowing
+## Security posture
 
-```bash
-nyx-doctor              health check: generation, boot signing, backups,
-                        failed units, and the things that break quietly
-nyx-backup run          back up now (initialises the repo if needed)
-nyx-backup mount        browse snapshots as a filesystem at /mnt/restic
-nyx-backup restore DIR  restore the latest snapshot
-nyx-caffeine            block idle lock/sleep (SUPER+SHIFT+C)
-nyx-wallpaper pick      thumbnail browser over ~/Pictures/wallpapers
-nyx-dictate             voice to text (SUPER+D)
-nyx-shot window|screen|save
-nyx-remind 25m "..."    notification via a transient systemd timer
-```
+**Boot:** Secure Boot enforcing, signed with my own keys via lanzaboote
+v1.1.0. `bootctl status` reports `Secure Boot: enabled (user)`. Keys in
+`/var/lib/sbctl`, backed up on the vault USB. TPM2 is not available on this
+machine, so LUKS takes a passphrase at every boot — the right trade anyway.
+
+**Secrets:** two recipients in `.sops.yaml` — the host SSH key (so sops-nix
+can decrypt at activation) and my personal age key (so I can edit as
+myself). `users.mutableUsers = false`; the password comes from
+`/run/secrets-for-users/coops-password`, so `passwd` is a no-op.
+
+**Network:** Quad9 over TLS with `Domains = "~."`, so no query ever reaches
+a DHCP-supplied resolver. Currently `opportunistic`/`allow-downgrade` —
+tightening while living in hotels is asking for trouble.
+
+**Backups:** restic to Exoscale Geneva, daily, incremental, client-side
+encrypted, 7 daily / 5 weekly / 12 monthly. Bucket has versioning and object
+lock, so a compromised laptop cannot delete its own snapshots.
+
+**Vault USB:** LUKS2, in a safe deposit box. Holds the age key, restic
+password and S3 credentials, GPG key, SSH keys, sbctl keys, the LUKS header
+backup, KeePassXC databases, and a README explaining what each unlocks.
 
 ## Hard-won lessons (do not relearn these)
 
-1. **Nothing network-dependent in a home-manager activation script.**
-   Activation runs before the network and under `set -e`; a failed `git
-   clone` aborted the entire user config. Bootstrapping is a
-   `systemd.user.service` after `network-online.target` that swallows its
-   own failures.
+1. **Nothing network-dependent in a home-manager activation script.** It
+   runs before the network and under `set -e`; a failed `git clone` aborted
+   the entire user config. Use a `systemd.user.service` after
+   `network-online.target` that swallows its own failures.
 2. **Set `home-manager.backupFileExtension`.** One stray pre-existing file
    blocked all of activation.
-3. **`initialPassword` is a no-op if the account already exists.**
-4. **`nixos-rebuild test` does not survive a reboot.** Check
-   `readlink -f /run/current-system` against
-   `readlink -f /nix/var/nix/profiles/system` — if they differ you are on a
-   test generation.
-5. **Run `passwd` after install.** Not doing so cost a full reinstall:
+3. **`nixos-rebuild test` does not survive a reboot.** Compare
+   `readlink -f /run/current-system` with
+   `readlink -f /nix/var/nix/profiles/system`.
+4. **Run `passwd` after install.** Not doing so cost a full reinstall:
    `pam_unix: auth could not identify password` means no hash exists, and no
    generation can fix it because they share `/etc/shadow`.
-6. **Flakes read the git index.** Edit without `git add` and Nix evaluates
-   the old state.
-7. **A running service predates the config that replaced it.** Restart the
+5. **Flakes read the git index.** Edit without `git add` and Nix evaluates
+   the old state. "Path does not exist in Git repository" means exactly this.
+6. **A running service predates the config that replaced it.** Restart the
    unit before debugging.
-8. **`FallbackDNS` is only consulted when no other DNS is configured.**
-   Quad9 belongs in `DNS` with `Domains = "~."`. Strict DNSSEC + strict
+7. **`FallbackDNS` is only consulted when no other DNS is configured.**
+   Quad9 belongs in `DNS` with `Domains = "~."`. Strict DNSSEC plus strict
    DNSOverTLS against a DHCP resolver breaks every lookup.
-9. **Nix wants a semicolon after every attribute**, including the last.
-10. **In `''` strings, `''` is the escape character.** It cannot appear
-    literally, not even inside a comment within the string.
-11. **Nested quoting (Nix → Lua → shell) is where configs break.** If a
+8. **Nix wants a semicolon after every attribute**, including the last.
+9. **In `''` strings, `''` is the escape character.** It cannot appear
+   literally — not even inside a comment within the string.
+10. **Nested quoting (Nix → Lua → shell) is where configs break.** If a
     command needs quotes or `$(...)`, put it in a script in `home/tools.nix`
     and call the script.
-12. **`allowUnfreePredicate` is a function, not a list.** A second definition
-    replaces the first rather than merging. Keep one, in `apps.nix`.
+11. **Inside `home.file."....lua".text`, comments are Lua (`--`), not Nix.**
+12. **`allowUnfreePredicate` is a function, not a list.** A second
+    definition replaces the first rather than merging.
 13. **home-manager's gtk module writes the same dconf keys you might set by
     hand.** Two different values is a hard conflict.
-14. **sops `neededForUsers` secrets land in `/run/secrets-for-users`,**
-    not `/run/secrets`.
-15. **`hyprctl dispatch` parses its argument as Lua now.**
-    `hyprctl dispatch dpms off` fails silently; the form is
-    `hyprctl dispatch 'hl.dsp.dpms({ state = "off" })'`. Anything still
-    using the old syntax is quietly doing nothing.
-16. **Never fix a dpms `off` without its matching `on`.** With both broken
-    the screen simply never blanks. Fix only the `off` and you get a black
-    screen with no way back — reboot territory. `Ctrl+Alt+F2` still works.
-17. **Secrets are 0400 root.** `sudo -E` does not help because sudo drops the
-    environment; source the env file *inside* the root shell:
+14. **sops `neededForUsers` secrets land in `/run/secrets-for-users`.**
+15. **Secrets are 0400 root; `sudo -E` does not help** because sudo drops
+    the environment. Source the env file *inside* the root shell:
     `sudo sh -c 'set -a; . /run/secrets/x; set +a; cmd'`.
-18. **`programs.nh.clean` and `nix.gc.automatic` conflict.** Pick one.
-19. **Deleting a file that a .nix still references** gives "Path does not
-    exist in Git repository", which reads like a git problem and is not.
-20. **`nyx-wallpaper` keeps state in `~/.local/state/nyx/wallpaper`.** A
-    stale path there survives a config change, because the old image is
-    still in the store until the next GC.
+16. **PostgreSQL 15+ revokes CREATE on the public schema.** Metasploit
+    connects, fails to create its tables, then errors on every query.
+    `ALTER DATABASE ... OWNER` and `ALTER SCHEMA public OWNER`.
+17. **`$PSQL` is not defined in a `postStart` hook** you write yourself.
+    Use the package path.
+18. **Never `sbctl sign` anything lanzaboote manages.** Signing appends
+    bytes, changing the hash the UKI stubs check. Every generation then
+    panics with `Kernel hash does not match`.
+19. **`/boot/EFI/nixos/kernel-*.efi` showing unsigned is CORRECT.** It is
+    the raw kernel the stub loads, not part of the signature chain. Do not
+    sign it, do not delete it.
+20. **ThinkPad firmware sets the immutable attribute on efivars.**
+    `chattr -i` the KEK and db entries before `enroll-keys`. Resets each
+    boot. The firmware also hangs on the splash after any Secure Boot state
+    change — power-cycle once before assuming failure.
 21. **`nh clean` prunes the store, not the ESP.** Without an ExecStartPost
-    of `switch-to-configuration boot`, /boot keeps UKIs for generations that
-    no longer exist — and with two specialisations each, a 1GB ESP fills.
+    of `switch-to-configuration boot`, `/boot` fills with UKIs for
+    generations that no longer exist.
 22. **Ghostty exports `GHOSTTY_RESOURCES_DIR` into the session,** so Emacs
-    and everything it spawns inherits it. home-manager's zshrc then sources
-    Ghostty's shell integration inside `eat`, which emits escape sequences
-    eat does not implement: keystrokes duplicate and paste corrupts. Guard
-    on `$TERM`, not on the file existing.
-23. **eat compiles its own terminfo into `straight/build`,** which straight
-    wipes on rebuild. If `infocmp eat-truecolor` fails, that is why.
-24. **Inside `home.file."....lua".text`, comments are Lua (`--`), not Nix
-    (`#`).** A `#` there is a syntax error one line into the file.
-25. **The Hyprland Lua function is `hl.window_rule`, with an underscore.**
-    `pcall` swallowed the wrong name silently, so the rules did nothing and
-    said nothing.
-26. **Fractional monitor scaling upsamples XWayland clients.** Steam looked
+    inherits it and home-manager's zshrc loads Ghostty's shell integration
+    inside `eat`. Guard on `$TERM`, not on the file existing.
+23. **The Hyprland Lua function is `hl.window_rule`, with an underscore,**
+    and class matching is a regex. `pcall` swallowed the wrong name
+    silently.
+24. **Fractional monitor scaling upsamples XWayland clients.** Steam looked
     like a stretched JPEG until `xwayland.force_zero_scaling`.
-27. **The vault paid for itself.** SSH keys vanished from `~/.ssh` for
-    reasons never established; restored from the stick in two minutes.
-    Backups are not theoretical.
-
-## Backups
-
-restic to Exoscale Simple Object Storage, Geneva (`sos-ch-gva-2`). Swiss
-company, Swiss jurisdiction, data never leaves the zone's country. Client-side
-encryption means the provider holds opaque blobs regardless.
-
-Daily timer, `Persistent` so it catches up after the machine was off. Every
-run after the first is incremental — restic dedupes at block level. Retention
-is 7 daily, 5 weekly, 12 monthly, pruned in the same run.
-
-First snapshot: 17,320 files, 515 MiB, 392 MiB stored. Restore verified.
-
-Backed up: `.shh`, `.ssh`, `.gnupg`, `.emacs.d`, Documents, Projects,
-Pictures. Excluded: `.git`, `node_modules`, `target`, `result`, `.direnv`,
-`straight/build`, `eln-cache`. The Nix store is not backed up; the flake
-rebuilds it.
-
-Credentials are two sops secrets: `restic-password` and `restic-s3-env`
-(an EnvironmentFile with the Exoscale IAM key, secret and region).
-
-```bash
-# run one now
-sudo systemctl start restic-backups-beta.service
-
-# anything needing the repo directly must source the env as root
-sudo sh -c 'set -a; . /run/secrets/restic-s3-env; set +a; \
-  restic -r s3:https://sos-ch-gva-2.exo.io/beta-backup-bucket \
-  --password-file /run/secrets/restic-password snapshots'
-```
-
-**Losing `restic-password` loses the backups.** Keep a copy off this machine.
-
-## Secure Boot
-
-Enforcing, with my own keys. `bootctl status` reports
-`Secure Boot: enabled (user)` — "user" meaning my key hierarchy, not a
-factory chain. lanzaboote v1.1.0; earlier tags set `boot.bootspec.enable`,
-which nixpkgs removed, so anything below v1.1.0 fails to evaluate.
-
-Keys live in `/var/lib/sbctl`, backed up on the vault USB. Every generation
-and specialisation gets its own signed UKI under `/boot/EFI/Linux/`.
-
-**Three things that cost me a broken boot and a live-USB rescue:**
-
-1. **Never `sbctl sign` anything lanzaboote manages.** Signing appends bytes
-   to the file, which changes its hash. lanzaboote's stubs embed a hash of
-   the kernel and refuse to load one that does not match — every generation
-   then panics with `Kernel hash does not match`.
-2. **`/boot/EFI/nixos/kernel-*.efi` showing `✗ not signed` is CORRECT.**
-   It is the raw kernel the stub loads at boot, not a leftover and not part
-   of the signature chain. Do not sign it, do not delete it.
-3. **Never delete anything from `/boot`.** Recovery is a live USB,
-   `nixos-enter`, then `switch-to-configuration boot`. If the file was
-   signed by mistake, `sbctl remove-file` it and delete it first so
-   lanzaboote copies a clean one from the store.
-
-ThinkPad firmware also sets the immutable attribute on efivars, so
-`enroll-keys` fails until:
-
-```bash
-sudo chattr -i /sys/firmware/efi/efivars/KEK-* /sys/firmware/efi/efivars/db-*
-```
-
-That resets on every boot. And the firmware hangs on the Lenovo splash after
-any Secure Boot state change — power-cycle once before assuming failure.
-
-TPM2 is not available on this machine (`bootctl status` reports
-`TPM2 Support: no`), so TPM-backed LUKS unlock was never an option. LUKS
-passphrase at every boot, which is the right trade anyway.
-
-## Antivirus
-
-No daemon: it holds the whole signature set in memory (~1GB), and on a
-read-only, hash-verified store the realistic threat is passing an infected
-file to someone else rather than local infection.
-
-Instead, a weekly `clamscan` of `~/Downloads` and `~/Documents`, niced to 19
-with idle IO. It reports and never removes — a false positive deleting my own
-file is worse than the malware. `SuccessExitStatus = [ 1 ]` because clamscan
-exits 1 when it *finds* something, which systemd would otherwise call a
-failure. Results: `journalctl -u clamav-scan`.
-
-freshclam is ordered after `network-online.target` with a retry, because it
-was firing the instant the machine resumed and failing on DNS.
-
-## Secrets
-
-Two recipients in `.sops.yaml`: `&beta`, the **host** SSH key
-(`ssh-to-age < /etc/ssh/ssh_host_ed25519_key.pub`), and a personal age key at
-`~/.config/sops/age/keys.txt`. The host key lets sops-nix decrypt at
-activation; the personal key lets me run `sops secrets/secrets.yaml` as
-myself without sudo.
-
-The personal key cannot live inside the backups it protects. Keep it off
-this machine.
-
-`users.mutableUsers = false`; the password comes from
-`/run/secrets-for-users/coops-password`. `passwd` is therefore a no-op.
-To change it: `mkpasswd -m yescrypt`, `sops secrets/secrets.yaml`, rebuild.
-
-Verify a hash matches a password:
-`mkpasswd -S "$(sudo cat /run/secrets-for-users/coops-password)" <password>`
-
-## Daily use
-
-```bash
-cd ~/Projects/nyx
-$EDITOR modules/whatever.nix
-git add -A                      # flakes read the git INDEX
-sudo nixos-rebuild test --flake .#beta      # prove it
-sudo nixos-rebuild switch --flake .#beta    # keep it
-```
-
-Full command reference in `CHEATSHEET.md`.
-
-Never change boot or crypto in the same generation as anything else. Old
-generations are in the boot menu; that safety net does not cover LUKS,
-lanzaboote or `mutableUsers = false`.
+25. **A dialog can have a different WM class from its parent.** KeePassXC's
+    unlock window is `keepassxc`, not `org.keepassxc.KeePassXC`.
+26. **The vault paid for itself within a day.** SSH keys vanished from
+    `~/.ssh` for reasons never established; restored in two minutes.
 
 ## Next actions
 
-- [ ] Tighten DNS to `DNSSEC = "true"` / `DNSOverTLS = "true"` once
-      opportunistic mode is proven on the networks I use. Not yet — I am
-      travelling and every hotel network is a new test case.
 - [ ] Test a real restore via `nyx-backup mount`, not just `.ssh`.
+- [ ] Tighten DNS to strict once I am off hotel wifi.
 - [ ] Package melancholy properly: the `.tmTheme` upstream to bat, the
-      palette as a PR somewhere it gets used by someone other than me.
-- [ ] Confirm the window rules actually apply now that the function name is
-      right: `hyprctl clients -j | jq -r '.[].class'` for real class strings.
-- [x] Secure Boot enforcing with my own keys.
-- [ ] `thunderbolt` is blacklisted in `security.nix` — remove if using a dock.
-- [ ] External displays; dock; fingerprint reader.
-- [ ] Second host via `mkHost` — the multi-machine abstraction is untested.
-- [ ] Per-language editor setup; wallpaper picker with thumbnails;
-      melancholy as a bat `.tmTheme`.
+      palette somewhere it gets used by someone other than me.
+- [ ] File the Waybar workspace-click issue (see KNOWN-ISSUES.md).
+- [ ] External displays, dock, fingerprint reader.
+- [ ] A second host, once I am reunited with my belongings.

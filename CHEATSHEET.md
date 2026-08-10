@@ -40,16 +40,35 @@ Unfree packages must also be added to the allow-list in `modules/apps.nix`.
 That list is deliberate: it is the complete inventory of non-free software
 on the machine.
 
-## Handy commands
+## Nyx commands
 
 ```bash
-nh os switch                 # rebuild with progress and a package diff
-nh os boot                   # same, applied at next boot
-nh clean all                 # garbage collect, keeping recent generations
-, cowsay hello               # run something you have not installed
-nix-index                    # build the comma database (slow, once)
-nvd diff /run/current-system ./result
+nyx-doctor              health check: generation, boot signing, backup age,
+                        failed units, known issues, and the things that
+                        break quietly
+nyx-backup run          back up now (initialises the repo if needed)
+nyx-backup mount        browse snapshots as a filesystem at /mnt/restic
+nyx-backup restore DIR  restore the latest snapshot
+nyx-backup check        verify repository integrity
+nyx-report <project>    gather context and draft an upstream issue
+nyx-caffeine            block idle lock and sleep (SUPER+SHIFT+C)
+nyx-wallpaper pick      thumbnail browser over ~/Pictures/wallpapers
+nyx-dictate             voice to text (SUPER+D)
+nyx-shot window|screen|save
+nyx-record              start/stop screen recording
+nyx-remind 25m "..."    notification via a transient systemd timer
+nyx-ws next|prev|1-9    switch workspace from a command
+nyx-menu-root           the SUPER+ALT+Space menu
 ```
+
+## Personal shell functions
+
+Anything in `~/.config/zsh/local/*.zsh` is sourced at shell start. Not in
+this repo, not published, but backed up by restic. No rebuild needed — open
+a new shell.
+
+A gitignored `.nix` file will NOT work: flakes read the git index, so a file
+git does not track is invisible to Nix and cannot be imported.
 
 ## Specialisations
 
@@ -59,22 +78,10 @@ Extra boot entries built from the same config:
   USB autosuspend. For a flight or a long day away from mains.
 - **performance** — performance governor, no charge thresholds.
 
-Pick one from the boot menu. To switch without rebooting:
+Pick one from the boot menu, or switch without rebooting:
 
 ```bash
 sudo /run/current-system/specialisation/battery/bin/switch-to-configuration test
-```
-
-## Backups
-
-`modules/backup.nix` (restic, daily timer). Not imported until configured:
-set `repository`, add `restic-password` to `secrets/secrets.yaml`, import,
-then initialise once:
-
-```bash
-sudo restic -r <repo> --password-file /run/secrets/restic-password init
-sudo restic -r <repo> --password-file /run/secrets/restic-password snapshots
-sudo systemctl start restic-backups-beta.service    # run one now
 ```
 
 ## Updating
