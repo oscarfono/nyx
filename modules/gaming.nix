@@ -22,6 +22,11 @@
 
   hardware.graphics.enable32Bit = true;
 
+  # Steam's UI is Chromium-based and does its own scaling. With
+  # force_zero_scaling it renders at native resolution, so it needs telling
+  # the display scale or the UI comes out tiny.
+  environment.sessionVariables.STEAM_FORCE_DESKTOPUI_SCALING = "1.5";
+
   environment.systemPackages = with pkgs; [
     mangohud
     protonup-qt

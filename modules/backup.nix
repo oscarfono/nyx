@@ -73,5 +73,75 @@ in
     ];
   };
 
-  environment.systemPackages = [ pkgs.restic ];
+  # nyx-backup: one command for every interaction with the repository, so
+  # the sudo + source-the-env dance lives in exactly one place.
+  #
+  # There is no "full vs incremental" distinction to make: restic dedupes at
+  # block level, so the first snapshot is large and every one after it sends
+  # only changed blocks. Each snapshot is independently restorable either
+  # way. The only special case is a repository that has never been
+  # initialised, which this handles.
+  environment.systemPackages = [
+    pkgs.restic
+    (pkgs.writeShellScriptBin "nyx-backup" ''
+      set -eu
+
+      if [ "$(id -u)" -ne 0 ]; then
+        exec sudo "$0" "$@"
+      fi
+
+      set -a
+      . /run/secrets/restic-s3-env
+      set +a
+
+      REPO="${repository}"
+      PW=/run/secrets/restic-password
+      R="${pkgs.restic}/bin/restic -r $REPO --password-file $PW"
+
+      case "''${1:-run}" in
+        run)
+          if ! $R cat config >/dev/null 2>&1; then
+            echo "Repository not initialised. Creating it..."
+            $R init
+          fi
+          systemctl start restic-backups-${hostName}.service
+          echo
+          $R snapshots --latest 1
+          ;;
+        snapshots) $R snapshots ;;
+        stats)     $R stats latest ;;
+        check)     $R check --read-data-subset=5% ;;
+        mount)
+          mkdir -p /mnt/restic
+          echo "Browsing snapshots at /mnt/restic. Ctrl-C to unmount."
+          $R mount /mnt/restic
+          ;;
+        restore)
+          [ -n "''${2:-}" ] || { echo "usage: nyx-backup restore <target-dir> [path]" >&2; exit 1; }
+          if [ -n "''${3:-}" ]; then
+            $R restore latest --target "$2" --include "$3"
+          else
+            $R restore latest --target "$2"
+          fi
+          ;;
+        forget)    $R forget --prune --keep-daily 7 --keep-weekly 5 --keep-monthly 12 ;;
+        *)
+          cat >&2 <<USAGE
+usage: nyx-backup <command>
+
+  run                       back up now (initialises the repo if needed)
+  snapshots                 list every snapshot
+  stats                     size of the latest snapshot
+  check                     verify repository integrity (samples 5% of data)
+  mount                     browse snapshots as a filesystem at /mnt/restic
+  restore DIR [PATH]        restore latest snapshot into DIR
+  forget                    apply the retention policy and prune
+
+Repository: $REPO
+USAGE
+          exit 1
+          ;;
+      esac
+    '')
+  ];
 }

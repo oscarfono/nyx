@@ -58,6 +58,9 @@ in
           follow_mouse = 1,
           touchpad = { natural_scroll = true },
         },
+        xwayland = {
+          force_zero_scaling = true,
+        },
       })
 
       -- Applications
