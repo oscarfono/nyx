@@ -15,6 +15,11 @@
 
   services.blueman.enable = true;
 
+  # The applet is the bluetooth indicator: state at a glance, click for the
+  # device menu. There is no Waybar bluetooth module, deliberately — one
+  # indicator per thing.
+  systemd.user.services.blueman-applet.wantedBy = [ "graphical-session.target" ];
+
   # Wireplumber handles the audio side; this makes it prefer high-quality
   # A2DP codecs over the low-bandwidth headset profile when both are offered.
   environment.etc."wireplumber/wireplumber.conf.d/50-bluez.conf".text = ''

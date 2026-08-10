@@ -184,10 +184,14 @@ in
     CAPTURE
       Print               region to clipboard
       SHIFT Print         region to satty
+      SUPER Print         active window to clipboard
+      CTRL Print          whole screen to clipboard
+      SUPER SHIFT S       region saved to ~/Pictures/screenshots
       SUPER SHIFT R       record start/stop
 
     SESSION
       SUPER SHIFT L       lock
+      power button        far right of the bar: suspend, reboot, shutdown
   '';
 
   # -------------------------------------------------------------------
@@ -205,9 +209,19 @@ in
       modules-left = [ "hyprland/workspaces" "hyprland/window" ];
       modules-center = [ "clock" ];
       modules-right = [
-        "custom/caffeine" "pulseaudio" "backlight" "battery"
-        "bluetooth" "network" "tray"
+        # Bluetooth and network are handled by their tray applets
+        # (blueman-applet, nm-applet), which carry both state and a click
+        # menu. A Waybar module for either would only duplicate them.
+        "tray" "custom/caffeine" "pulseaudio" "backlight" "battery"
+        "custom/power"
       ];
+
+      "custom/power" = {
+        format = "󰐥";
+        tooltip = true;
+        tooltip-format = "Session: lock, suspend, reboot, shutdown, log out";
+        on-click = "nyx-power";
+      };
 
       "custom/caffeine" = {
         exec = "nyx-caffeine-status";
@@ -265,26 +279,9 @@ in
         interval = 30;
       };
 
-      bluetooth = {
-        format = "󰂯";
-        format-disabled = "";
-        format-connected = "󰂱 {device_alias}";
-        tooltip-format-connected = "{device_enumerate}";
-        on-click = "blueman-manager";
-      };
-
-      network = {
-        format-wifi = "󰤨 {essid}";
-        format-ethernet = "󰈀 wired";
-        format-disconnected = "󰤭 offline";
-        tooltip-format-wifi = "{essid}  {signalStrength}%  {ipaddr}";
-        tooltip-format-ethernet = "{ifname}  {ipaddr}";
-        on-click = "ghostty -e nmtui";
-      };
-
       tray = {
         spacing = 8;
-        icon-size = 16;
+        icon-size = 15;
       };
     };
 
@@ -330,31 +327,28 @@ in
         font-weight: bold;
       }
 
-      /* One pill for the status cluster. */
-      #custom-caffeine, #pulseaudio, #backlight, #battery, #bluetooth, #network {
+      /* One pill for the status cluster, tray included, power on the end. */
+      #custom-caffeine, #pulseaudio, #backlight, #battery,
+      #tray, #custom-power {
         background: ${t.bgSubtle};
         padding: 0 10px;
         margin: 5px 0;
+        font-size: 15px;
       }
       #custom-caffeine { border-radius: 6px 0 0 6px; margin-left: 8px; }
+      #custom-power    { border-radius: 0 6px 6px 0; margin-right: 8px; }
+
       #custom-caffeine.on  { color: ${t.amber}; }
       #custom-caffeine.off { color: ${t.fgMuted}; }
-      #network    { border-radius: 0 6px 6px 0; }
-
-      #pulseaudio { color: ${t.cyan}; }
-      #backlight  { color: ${t.fg}; }
-      #battery    { color: ${t.green}; }
-      #bluetooth  { color: ${t.cyan}; }
-      #network    { color: ${t.fg}; }
+      #pulseaudio   { color: ${t.cyan}; }
+      #backlight    { color: ${t.fg}; }
+      #battery      { color: ${t.green}; }
+      #custom-power { color: ${t.red}; }
+      #custom-power:hover { color: ${t.bg}; background: ${t.red}; }
 
       #battery.warning  { color: ${t.amber}; }
       #battery.critical { color: ${t.bg}; background: ${t.red}; }
       #battery.charging { color: ${t.green}; }
-
-      #tray {
-        padding: 0 10px 0 12px;
-        margin-right: 4px;
-      }
 
       tooltip {
         background: ${t.bg};

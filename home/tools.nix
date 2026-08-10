@@ -195,6 +195,20 @@ let
 
     echo
   '';
+
+  # Power menu. Reuses the generated Session submenu so there is exactly one
+  # definition of what "shutdown" means — edit lib/menu.nix and both the
+  # Waybar button and SUPER+ALT+Space follow.
+  nyx-power = pkgs.writeShellScriptBin "nyx-power" ''
+    # The Session submenu in lib/menu.nix renders to this script name:
+    # slug() strips glyphs and spaces, so "󰌾  Session" -> "session".
+    # Rename that menu entry and this breaks, hence the fallback.
+    if command -v nyx-menu-root-session >/dev/null; then
+      exec nyx-menu-root-session
+    fi
+    exec nyx-menu-root
+  '';
+
 in
 {
   home.packages = [
@@ -203,6 +217,7 @@ in
     nyx-caffeine
     nyx-caffeine-status
     nyx-doctor
+    nyx-power
     pkgs.jq
     nyx-remind
     nyx-remind-prompt
