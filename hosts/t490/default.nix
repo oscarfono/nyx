@@ -10,6 +10,7 @@
     ../../modules/emacs.nix
     ../../modules/devops.nix
     ../../modules/security.nix
+    ../../modules/secops.nix
     ../../modules/bluetooth.nix
     ../../modules/gaming.nix
     ../../modules/backup.nix
@@ -49,7 +50,7 @@
   users.users.${username} = {
     isNormalUser = true;
     description = username;
-    extraGroups = [ "wheel" "networkmanager" "video" "audio" "docker" ];
+    extraGroups = [ "wheel" "networkmanager" "video" "audio" "docker" "wireshark" ];
     shell = pkgs.zsh;
   };
   programs.zsh.enable = lib.mkDefault true;

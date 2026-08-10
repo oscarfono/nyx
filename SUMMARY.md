@@ -20,8 +20,10 @@ LUKS-encrypted root · greetd/regreet · plymouth boot · Hyprland (Lua config)
 straight.el · swaybg wallpapers · Quad9 DNS over TLS · sops-nix secrets with
 declarative passwords · Bluetooth · Steam · tree-sitter grammars · voice
 dictation (whisper.cpp, local) · restic backups to Exoscale · nh/comma
-tooling · battery and performance specialisations · **Secure Boot enforcing
-with my own keys via lanzaboote**.
+tooling · battery and performance specialisations · Secure Boot enforcing
+with my own keys via lanzaboote · web apps as launcher entries · window
+rules · caffeine toggle · `nyx-doctor` health check · terminal output
+coloured from the palette.
 
 **Suspend measured:** 85% → 79% over 8h26m in S3, about 0.7%/hour. Roughly
 six days suspended on a full charge. Clean resume, wifi survived, no wake
@@ -75,6 +77,9 @@ home/emacs.nix         .emacs.d clone + straight seed (user service)
 home/treesitter.nix    prebuilt grammars into ~/.emacs.d/tree-sitter
 home/dictation.nix     whisper.cpp, SUPER+D toggle
 home/xdg.nix           default applications
+home/colours.nix       LS_COLORS, zsh highlighting, less/man, ripgrep, fzf
+home/webapps.nix       renders lib/webapps.nix into desktop entries
+lib/webapps.nix        web apps as data
 home/agents.nix        agent tooling
 hosts/t490/            hardware profile, host settings
 ```
@@ -97,6 +102,21 @@ hosts/t490/            hardware profile, host settings
 `SHIFT+Print` to satty · `SUPER+SHIFT+R` record toggle.
 
 Menu sections: Style, Capture, Tools, Network, Nix, System, Session, Learn.
+
+## Commands worth knowing
+
+```bash
+nyx-doctor              health check: generation, boot signing, backups,
+                        failed units, and the things that break quietly
+nyx-backup run          back up now (initialises the repo if needed)
+nyx-backup mount        browse snapshots as a filesystem at /mnt/restic
+nyx-backup restore DIR  restore the latest snapshot
+nyx-caffeine            block idle lock/sleep (SUPER+SHIFT+C)
+nyx-wallpaper pick      thumbnail browser over ~/Pictures/wallpapers
+nyx-dictate             voice to text (SUPER+D)
+nyx-shot window|screen|save
+nyx-remind 25m "..."    notification via a transient systemd timer
+```
 
 ## Hard-won lessons (do not relearn these)
 
@@ -153,7 +173,21 @@ Menu sections: Style, Capture, Tools, Network, Nix, System, Session, Learn.
 21. **`nh clean` prunes the store, not the ESP.** Without an ExecStartPost
     of `switch-to-configuration boot`, /boot keeps UKIs for generations that
     no longer exist — and with two specialisations each, a 1GB ESP fills.
-22. **The vault paid for itself.** SSH keys vanished from `~/.ssh` for
+22. **Ghostty exports `GHOSTTY_RESOURCES_DIR` into the session,** so Emacs
+    and everything it spawns inherits it. home-manager's zshrc then sources
+    Ghostty's shell integration inside `eat`, which emits escape sequences
+    eat does not implement: keystrokes duplicate and paste corrupts. Guard
+    on `$TERM`, not on the file existing.
+23. **eat compiles its own terminfo into `straight/build`,** which straight
+    wipes on rebuild. If `infocmp eat-truecolor` fails, that is why.
+24. **Inside `home.file."....lua".text`, comments are Lua (`--`), not Nix
+    (`#`).** A `#` there is a syntax error one line into the file.
+25. **The Hyprland Lua function is `hl.window_rule`, with an underscore.**
+    `pcall` swallowed the wrong name silently, so the rules did nothing and
+    said nothing.
+26. **Fractional monitor scaling upsamples XWayland clients.** Steam looked
+    like a stretched JPEG until `xwayland.force_zero_scaling`.
+27. **The vault paid for itself.** SSH keys vanished from `~/.ssh` for
     reasons never established; restored from the stick in two minutes.
     Backups are not theoretical.
 
@@ -279,7 +313,13 @@ lanzaboote or `mutableUsers = false`.
 ## Next actions
 
 - [ ] Tighten DNS to `DNSSEC = "true"` / `DNSOverTLS = "true"` once
-      opportunistic mode is proven on the networks I use.
+      opportunistic mode is proven on the networks I use. Not yet — I am
+      travelling and every hotel network is a new test case.
+- [ ] Test a real restore via `nyx-backup mount`, not just `.ssh`.
+- [ ] Package melancholy properly: the `.tmTheme` upstream to bat, the
+      palette as a PR somewhere it gets used by someone other than me.
+- [ ] Confirm the window rules actually apply now that the function name is
+      right: `hyprctl clients -j | jq -r '.[].class'` for real class strings.
 - [x] Secure Boot enforcing with my own keys.
 - [ ] `thunderbolt` is blacklisted in `security.nix` — remove if using a dock.
 - [ ] External displays; dock; fingerprint reader.

@@ -15,6 +15,8 @@
       "steam-unwrapped"
       "steam-original"
       "steam-run"
+      "burpsuite"
+      "maltego"
     ];
 
   environment.systemPackages = with pkgs; [

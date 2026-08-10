@@ -17,6 +17,7 @@
     ./bat.nix
     ./webapps.nix
     ./colours.nix
+    ./msf.nix
   ];
 
   home.username = username;
