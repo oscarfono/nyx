@@ -20,6 +20,7 @@ in
     pkgs.gnumake
     pkgs.cmake           # vterm, if your config uses it
     pkgs.libtool
+    pkgs.ncurses
 
     # Things your config reaches for.
     pkgs.ripgrep

@@ -3,7 +3,19 @@
 # User layer. Everything here is Nyx's own.
 
 {
-  imports = [ ./emacs.nix ./desktop.nix ./menu.nix ./wallpaper.nix ./tools.nix ./theme.nix ./agents.nix ./treesitter.nix ./dictation.nix ./xdg.nix ];
+  imports = [
+    ./emacs.nix
+    ./desktop.nix
+    ./menu.nix
+    ./wallpaper.nix
+    ./tools.nix
+    ./theme.nix
+    ./agents.nix
+    ./treesitter.nix
+    ./dictation.nix
+    ./xdg.nix
+    ./bat.nix
+  ];
 
   home.username = username;
   home.homeDirectory = "/home/${username}";
@@ -31,6 +43,26 @@
     enable = true;
     autosuggestion.enable = true;
     syntaxHighlighting.enable = true;
+
+    # Runs before home-manager's own blocks, which is what matters here:
+    # the Ghostty integration must not have loaded yet.
+    #
+    # Ghostty exports GHOSTTY_RESOURCES_DIR into the session, so Emacs and
+    # everything it spawns inherits it. home-manager's generated .zshrc
+    # sources Ghostty's shell integration whenever that path is readable —
+    # it checks for the file, not for the terminal. Inside Emacs `eat` that
+    # integration emits Ghostty-specific escape sequences for cursor
+    # position and bracketed paste, which eat does not implement: keystrokes
+    # duplicate on redraw and paste corrupts.
+    #
+    # Unsetting it outside Ghostty makes the existing guard do what it looks
+    # like it already does.
+    initContent = lib.mkOrder 550 ''
+      if [[ "$TERM" != xterm-ghostty ]]; then
+        unset GHOSTTY_RESOURCES_DIR
+      fi
+    '';
+
     shellAliases = {
       e = "emacsclient -c -a ''";
       ls = "eza --icons --group-directories-first";
@@ -41,6 +73,7 @@
       update = "nix flake update --flake ~/Projects/nyx";
     };
   };
+
   programs.starship.enable = true;
   programs.fzf.enable = true;
   programs.direnv = { enable = true; nix-direnv.enable = true; };
@@ -61,8 +94,6 @@
     signing.signByDefault = true;
     # signing.key = "YOUR-GPG-KEY-ID";
 
-    # home-manager moved git config under `settings` upstream. userName,
-    # userEmail and extraConfig are all folded in here now.
     settings = {
       user = {
         name = fullName;

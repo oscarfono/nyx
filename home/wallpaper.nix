@@ -1,39 +1,53 @@
 { config, pkgs, lib, ... }:
 
-# Wallpaper. Images live in the repo under assets/wallpapers and are copied
-# into the store, so a fresh machine gets them with the rebuild rather than
-# needing a separate download.
+# Wallpaper.
 #
-# swaybg, not hyprpaper. hyprpaper kept reporting "Monitor eDP-1 has no
-# target" while its IPC rejected every request, which left no way to set or
-# query a wallpaper. swaybg has no IPC and no daemon protocol: it draws one
-# image and exits when told to. Changing wallpaper is therefore "write the
-# path, restart the unit", which cannot get into a half-configured state.
+# Two halves, deliberately:
 #
-#   nyx-wallpaper next   cycle to the next image
-#   nyx-wallpaper pick   choose one from the menu picker
-#   nyx-wallpaper set X  set a specific path
+#   DEFAULT   assets/dark-abstract.png, committed to the repo and copied
+#             into the store. A fresh machine has a correct wallpaper on
+#             first boot with nothing to set up, and it can never point at
+#             a file that does not exist.
+#
+#   LIBRARY   ~/Pictures/wallpapers, an ordinary directory. Drop images in
+#             and they appear in the picker immediately, no rebuild. The
+#             repo's wallpapers are seeded there on first activation so the
+#             directory is never empty.
+#
+# swaybg rather than hyprpaper: no IPC, no daemon protocol, so changing
+# wallpaper is "write the path, restart the unit" and cannot end up in a
+# half-configured state.
+#
+#   nyx-wallpaper next      cycle through the library
+#   nyx-wallpaper pick      thumbnail browser (yazi in a Ghostty window)
+#   nyx-wallpaper set PATH  set a specific file
+#   nyx-wallpaper current   print the current path
 
 let
-  wallpapers = [
-    ../assets/wallpapers/bull-bear.png
+  # Shipped with the repo. This one is the fallback and can never be missing.
+  defaultWallpaper = "${../assets/wallpapers/dark-abstract.png}";
+
+  seeded = [
     ../assets/wallpapers/dark-abstract.png
-    ../assets/wallpapers/earth-space.jpg
     ../assets/wallpapers/full-moon-forest.jpg
+    ../assets/wallpapers/earth-space.jpg
+    ../assets/wallpapers/bull-bear.png
   ];
 
-  storePaths = map (w: "${w}") wallpapers;
-  first = builtins.elemAt storePaths 0;
-
-  picker = "${pkgs.walker}/bin/walker --dmenu";
+  library = "${config.home.homeDirectory}/Pictures/wallpapers";
 
   nyx-wallpaper = pkgs.writeShellScriptBin "nyx-wallpaper" ''
     set -eu
     STATE="''${XDG_STATE_HOME:-$HOME/.local/state}/nyx"
     mkdir -p "$STATE"
     CURRENT="$STATE/wallpaper"
+    LIB="${library}"
 
-    list() { printf '%s\n' ${lib.escapeShellArgs storePaths}; }
+    list() {
+      find "$LIB" -maxdepth 1 -type f \
+        \( -iname '*.png' -o -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.webp' \) \
+        | sort
+    }
 
     apply() {
       printf '%s\n' "$1" > "$CURRENT"
@@ -47,18 +61,30 @@ let
         if [ -z "$next" ] || [ "$next" = "$cur" ]; then
           next=$(list | head -1)
         fi
-        apply "$next"
+        [ -n "$next" ] && apply "$next"
         ;;
+
       pick)
-        choice=$(list | ${picker} -p "Wallpaper")
-        [ -n "$choice" ] && apply "$choice"
+        # yazi previews images inline; Ghostty speaks the kitty graphics
+        # protocol, so these are real thumbnails. --chooser-file makes yazi
+        # return the selection rather than opening it.
+        SEL=$(mktemp)
+        ${pkgs.ghostty}/bin/ghostty --title=nyx-wallpaper \
+          -e ${pkgs.yazi}/bin/yazi --chooser-file="$SEL" "$LIB" || true
+        choice=$(cat "$SEL" 2>/dev/null || true)
+        rm -f "$SEL"
+        [ -n "$choice" ] && [ -f "$choice" ] && apply "$choice"
         ;;
+
       set)
+        [ -f "$2" ] || { echo "no such file: $2" >&2; exit 1; }
         apply "$2"
         ;;
+
       current)
-        cat "$CURRENT" 2>/dev/null || echo "${first}"
+        cat "$CURRENT" 2>/dev/null || printf '%s\n' "${defaultWallpaper}"
         ;;
+
       *)
         echo "usage: nyx-wallpaper [next|pick|set PATH|current]" >&2
         exit 1
@@ -67,7 +93,13 @@ let
   '';
 in
 {
-  home.packages = [ nyx-wallpaper pkgs.swaybg ];
+  home.packages = [ nyx-wallpaper pkgs.swaybg pkgs.yazi ];
+
+  # Seed the library from the repo. `C` copies only if the target does not
+  # exist, so anything you add or delete afterwards is left alone.
+  systemd.user.tmpfiles.rules =
+    [ "d ${library} 0755 - - -" ]
+    ++ map (w: "C ${library}/${builtins.baseNameOf w} 0644 - - ${w}") seeded;
 
   systemd.user.services.nyx-wallpaper = {
     Unit = {
@@ -76,11 +108,9 @@ in
       After = [ "graphical-session.target" ];
     };
     Service = {
-      # Reads the state file each start, so nyx-wallpaper only has to write
-      # a path and restart this unit.
       ExecStart = toString (pkgs.writeShellScript "nyx-wallpaper-start" ''
-        IMG=$(cat "''${XDG_STATE_HOME:-$HOME/.local/state}/nyx/wallpaper" 2>/dev/null || echo "${first}")
-        [ -f "$IMG" ] || IMG="${first}"
+        IMG=$(cat "''${XDG_STATE_HOME:-$HOME/.local/state}/nyx/wallpaper" 2>/dev/null || true)
+        [ -n "$IMG" ] && [ -f "$IMG" ] || IMG="${defaultWallpaper}"
         exec ${pkgs.swaybg}/bin/swaybg -m fill -i "$IMG"
       '');
       Restart = "on-failure";
