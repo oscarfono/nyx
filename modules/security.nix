@@ -7,25 +7,25 @@
   # ---------------------------------------------------------------------
   # Boot integrity
   # ---------------------------------------------------------------------
-  # Secure Boot with your own keys. OFF until keys are enrolled: enabling
-  # first leaves the machine unbootable. Enrolment, once:
-  #   sudo nix run nixpkgs#sbctl create-keys
-  #   (reboot into firmware, clear existing keys, enter Setup Mode)
-  #   sudo nix run nixpkgs#sbctl enroll-keys -- --microsoft
-  # Then set the two options below and rebuild.
+  # Secure Boot with our own keys, via lanzaboote. Keys live in
+  # /var/lib/sbctl and are backed up on the vault USB.
+  #   sudo sbctl status    firmware state
+  #   sudo sbctl verify    every boot file must report signed
+  # If a kernel or bootloader change leaves something unsigned, do NOT
+  # reboot with Secure Boot enforcing.
   #
-  # boot.loader.systemd-boot.enable = lib.mkForce false;
-  # boot.lanzaboote = {
-  #   enable = true;
-  #   pkiBundle = "/var/lib/sbctl";
-  # };
+  boot.loader.systemd-boot.enable = lib.mkForce false;
+  boot.lanzaboote = {
+    enable = true;
+    pkiBundle = "/var/lib/sbctl";
+  };
 
   # Required for TPM2 unlock.
   boot.initrd.systemd.enable = true;
 
   # LUKS lives in hardware-configuration.nix. To add TPM2 unlock, once:
   #   sudo systemd-cryptenroll --tpm2-device=auto \
-  #        --tpm2-pcrs=0+2+7+12 /dev/nvme0n1p2
+  #        --tpm2-pcrs=0+2+7+12 /dev/sda2
   # PCR 7 binds to Secure Boot state, so do this AFTER enrolling keys or
   # you will invalidate the enrolment on the next boot.
 
@@ -57,6 +57,11 @@
     "firewire-core"
     "thunderbolt"  # DMA attack surface. Remove this line if you use a dock.
   ];
+
+  # Secure Boot tooling. Kept on the system rather than reached for via
+  # `nix shell` because `sudo sbctl verify` is worth running after any
+  # kernel or bootloader change, and friction means it gets skipped.
+  environment.systemPackages = [ pkgs.sbctl ];
 
   security.apparmor = {
     enable = true;

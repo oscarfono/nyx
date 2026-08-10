@@ -20,7 +20,7 @@
     # Secure Boot with your own keys. Wired up but disabled by default,
     # see modules/security.nix before you enable it.
     lanzaboote = {
-      url = "github:nix-community/lanzaboote/v0.4.2";
+      url = "github:nix-community/lanzaboote/v1.1.0";
       inputs.nixpkgs.follows = "nixpkgs";
     };
   };

@@ -112,9 +112,16 @@
     flake = "/home/${username}/Projects/nyx";
     clean = {
       enable = true;
-      extraArgs = "--keep 10 --keep-since 30d";
+      extraArgs = "--keep 5 --keep-since 14d";
     };
   };
+
+  # nh clean removes generations from the store, but the UKIs on the ESP are
+  # only pruned when lanzaboote next installs. Without this, /boot keeps
+  # images for generations that no longer exist — and with a specialisation
+  # each, that adds up fast on a 1GB partition.
+  systemd.services.nh-clean.serviceConfig.ExecStartPost =
+    "/run/current-system/bin/switch-to-configuration boot";
 
   # comma: run a program you do not have, once, without installing it.
   #   , cowsay hello
