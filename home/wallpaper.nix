@@ -4,14 +4,6 @@
 # into the store, so a fresh machine gets them with the rebuild rather than
 # needing a separate download.
 #
-# nyx-wallpaper is generated, not hand-written:
-#   nyx-wallpaper next   cycle to the next image
-#   nyx-wallpaper pick   choose one from the menu picker
-#   nyx-wallpaper set X  set a specific path
-
-# Wallpaper. Images live in the repo under assets/wallpapers and are copied
-# into the store, so a fresh machine gets them with the rebuild.
-#
 # swaybg, not hyprpaper. hyprpaper kept reporting "Monitor eDP-1 has no
 # target" while its IPC rejected every request, which left no way to set or
 # query a wallpaper. swaybg has no IPC and no daemon protocol: it draws one

@@ -33,6 +33,10 @@ let
     esac
   '';
 
+  nyx-dpms = pkgs.writeShellScriptBin "nyx-dpms" ''
+    exec ${pkgs.hyprland}/bin/hyprctl dispatch "hl.dsp.dpms({ state = \"''${1:-on}\" })"
+  '';
+
   # Reminders, using systemd rather than a daemon of its own.
   #   nyx-remind 25m "stand up"
   # systemd-run --user schedules a transient timer; nothing persists, nothing

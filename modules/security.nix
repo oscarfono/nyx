@@ -1,4 +1,4 @@
-{ config, pkgs, lib, inputs, ... }:
+{ config, pkgs, lib, inputs, username, ... }:
 
 # Hardening. Several of these trade convenience for assurance; read before
 # flipping switches.
@@ -163,8 +163,46 @@
   security.audit.enable = true;
   security.audit.rules = [ "-a exit,always -F arch=b64 -S execve" ];
 
+  # ClamAV. No daemon: it holds the whole signature set in memory (~1GB) and
+  # on a read-only, hash-verified store the realistic threat is passing an
+  # infected file on to someone else, not local infection. Scheduled scans
+  # cover that at negligible cost.
   services.clamav = {
-    daemon.enable = false;   # on-demand scanning only, the daemon is heavy
+    daemon.enable = false;
     updater.enable = true;
+  };
+
+  # freshclam fires the instant the machine resumes, before DNS is back, and
+  # fails. Wait for the network and retry rather than failing the unit.
+  systemd.services.clamav-freshclam = {
+    after = [ "network-online.target" ];
+    wants = [ "network-online.target" ];
+    serviceConfig = {
+      Restart = "on-failure";
+      RestartSec = "60s";
+    };
+  };
+
+  # Weekly scan of the places untrusted files actually land. Reports only,
+  # never removes: a false positive deleting your own file is worse than the
+  # malware it was looking for. Results: journalctl -u clamav-scan
+  systemd.services.clamav-scan = {
+    description = "ClamAV scan of downloads and documents";
+    serviceConfig = {
+      Type = "oneshot";
+      Nice = 19;
+      IOSchedulingClass = "idle";
+      SuccessExitStatus = [ 1 ];   # 1 means "found something", not "failed"
+      ExecStart = "${pkgs.clamav}/bin/clamscan -ri /home/${username}/Downloads /home/${username}/Documents";
+    };
+  };
+
+  systemd.timers.clamav-scan = {
+    wantedBy = [ "timers.target" ];
+    timerConfig = {
+      OnCalendar = "weekly";
+      Persistent = true;
+      RandomizedDelaySec = "1h";
+    };
   };
 }
