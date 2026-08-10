@@ -1,7 +1,5 @@
 # Nyx — project summary
 
-Paste this into a new session to pick up where the last one left off.
-
 ## What Nyx is
 
 **Nyx** ("Not Your X") is my standalone, security-first NixOS desktop config
@@ -24,8 +22,12 @@ declarative passwords · Bluetooth · Steam · tree-sitter grammars · voice
 dictation (whisper.cpp, local) · restic backups to Exoscale · nh/comma
 tooling · battery and performance specialisations.
 
-Untested: battery life over a full day, external displays, dock, fingerprint
-reader.
+**Suspend measured:** 85% → 79% over 8h26m in S3, about 0.7%/hour. Roughly
+six days suspended on a full charge. Clean resume, wifi survived, no wake
+events. 85% is the TLP charge ceiling, so that was full by this machine's
+definition.
+
+Untested: external displays, dock, fingerprint reader.
 
 ## Decisions, and why
 
@@ -131,12 +133,22 @@ Menu sections: Style, Capture, Tools, Network, Nix, System, Session, Learn.
     hand.** Two different values is a hard conflict.
 14. **sops `neededForUsers` secrets land in `/run/secrets-for-users`,**
     not `/run/secrets`.
-15. **Secrets are 0400 root.** `sudo -E` does not help because sudo drops the
+15. **`hyprctl dispatch` parses its argument as Lua now.**
+    `hyprctl dispatch dpms off` fails silently; the form is
+    `hyprctl dispatch 'hl.dsp.dpms({ state = "off" })'`. Anything still
+    using the old syntax is quietly doing nothing.
+16. **Never fix a dpms `off` without its matching `on`.** With both broken
+    the screen simply never blanks. Fix only the `off` and you get a black
+    screen with no way back — reboot territory. `Ctrl+Alt+F2` still works.
+17. **Secrets are 0400 root.** `sudo -E` does not help because sudo drops the
     environment; source the env file *inside* the root shell:
     `sudo sh -c 'set -a; . /run/secrets/x; set +a; cmd'`.
-16. **`programs.nh.clean` and `nix.gc.automatic` conflict.** Pick one.
-17. **Deleting a file that a .nix still references** gives "Path does not
+18. **`programs.nh.clean` and `nix.gc.automatic` conflict.** Pick one.
+19. **Deleting a file that a .nix still references** gives "Path does not
     exist in Git repository", which reads like a git problem and is not.
+20. **`nyx-wallpaper` keeps state in `~/.local/state/nyx/wallpaper`.** A
+    stale path there survives a config change, because the old image is
+    still in the store until the next GC.
 
 ## Backups
 
@@ -169,6 +181,21 @@ sudo sh -c 'set -a; . /run/secrets/restic-s3-env; set +a; \
 ```
 
 **Losing `restic-password` loses the backups.** Keep a copy off this machine.
+
+## Antivirus
+
+No daemon: it holds the whole signature set in memory (~1GB), and on a
+read-only, hash-verified store the realistic threat is passing an infected
+file to someone else rather than local infection.
+
+Instead, a weekly `clamscan` of `~/Downloads` and `~/Documents`, niced to 19
+with idle IO. It reports and never removes — a false positive deleting my own
+file is worse than the malware. `SuccessExitStatus = [ 1 ]` because clamscan
+exits 1 when it *finds* something, which systemd would otherwise call a
+failure. Results: `journalctl -u clamav-scan`.
+
+freshclam is ordered after `network-online.target` with a retry, because it
+was firing the instant the machine resumed and failing on DNS.
 
 ## Secrets
 
@@ -206,14 +233,15 @@ lanzaboote or `mutableUsers = false`.
 
 ## Next actions
 
-- [ ] Enable versioning and object lock on the Exoscale bucket. Without them
-      this laptop holds credentials that can delete every snapshot.
-- [ ] Store `~/.config/sops/age/keys.txt` and the restic password off-machine.
+- [x] Versioning and object lock enabled on the Exoscale bucket.
+- [x] Age key and restic password in KeePassXC on the MacBook. **That
+      database is not itself backed up** — find a better home, or print them.
 - [ ] Tighten DNS to `DNSSEC = "true"` / `DNSOverTLS = "true"` once
       opportunistic mode is proven on the networks I use.
 - [ ] lanzaboote: enrol keys with `sbctl` **before** enabling, TPM2
       `systemd-cryptenroll` only **after** (PCR 7 binds to Secure Boot state).
 - [ ] `thunderbolt` is blacklisted in `security.nix` — remove if using a dock.
-- [ ] Battery life over a full day; external displays; dock; fingerprint.
+- [ ] External displays; dock; fingerprint reader.
+- [ ] Second host via `mkHost` — the multi-machine abstraction is untested.
 - [ ] Per-language editor setup; wallpaper picker with thumbnails;
       melancholy as a bat `.tmTheme`.
