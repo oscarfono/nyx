@@ -15,6 +15,7 @@
     ./dictation.nix
     ./xdg.nix
     ./bat.nix
+    ./webapps.nix
   ];
 
   home.username = username;

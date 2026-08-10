@@ -36,6 +36,8 @@
       "󰍬  Dictate"         = { exec = "nyx-dictate"; };
       "󰅐  Set a reminder"  = { exec = "nyx-remind-prompt"; };
       "󰕧  Record toggle"   = { exec = "nyx-record"; };
+      "󰅶  Caffeine toggle" = { exec = "nyx-caffeine"; };
+      "󰄬  Health check"    = { exec = "ghostty -e sh -c 'nyx-doctor; read -n1'"; };
       "󰅇  Clipboard history" = { exec = "sh -c 'cliphist list | walker --dmenu | cliphist decode | wl-copy'"; };
     };
   };

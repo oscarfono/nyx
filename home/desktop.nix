@@ -113,7 +113,32 @@ in
       -- Capture
       ${luaBind "Print" (exec "nyx-shot clipboard")}
       ${luaBind "SHIFT + Print" (exec "nyx-shot edit")}
+      ${luaBind "SUPER + Print" (exec "nyx-shot window")}
+      ${luaBind "CTRL + Print" (exec "nyx-shot screen")}
+      ${luaBind "SUPER + SHIFT + S" (exec "nyx-shot save")}
       ${luaBind "SUPER + SHIFT + R" (exec "nyx-record")}
+      ${luaBind "SUPER + SHIFT + C" (exec "nyx-caffeine")}
+
+      -- Window rules. Small dialogs float and centre rather than tiling to
+      -- half the screen; long-lived apps get a home workspace.
+      pcall(function()
+        hl.windowrule({ match = { class = "org.keepassxc.KeePassXC" }, float = true, center = true, size = { 900, 600 } })
+        hl.windowrule({ match = { class = "pavucontrol" }, float = true, center = true, size = { 800, 600 } })
+        hl.windowrule({ match = { class = "qalculate-gtk" }, float = true, center = true })
+        hl.windowrule({ match = { class = "org.gnome.Nautilus" }, float = true, center = true, size = { 1100, 700 } })
+        hl.windowrule({ match = { class = "blueman-manager" }, float = true, center = true })
+        hl.windowrule({ match = { title = "nyx-wallpaper" }, float = true, center = true, size = { 1000, 700 } })
+        hl.windowrule({ match = { class = "localsend_app" }, float = true, center = true })
+
+        hl.windowrule({ match = { class = "emacs" }, workspace = 1 })
+        hl.windowrule({ match = { class = "brave-browser" }, workspace = 2 })
+        hl.windowrule({ match = { class = "org.mozilla.firefox" }, workspace = 2 })
+        hl.windowrule({ match = { class = "steam" }, workspace = 4 })
+
+        -- Web apps: chromeless Brave windows, their own class each.
+        hl.windowrule({ match = { class = "brave-web.whatsapp.com__-Default" }, workspace = 3 })
+        hl.windowrule({ match = { class = "brave-mail.proton.me__-Default" }, workspace = 3 })
+      end)
 
       -- Media and brightness. locked = works on the lock screen.
       pcall(function()
@@ -141,6 +166,7 @@ in
       SUPER Space         launcher (fuzzel)
       SUPER ALT Space     nyx menu
       SUPER K             this cheatsheet
+      SUPER SHIFT C       caffeine (block idle lock/sleep)
 
     WINDOWS
       SUPER Return        maximise (keeps the bar visible)
@@ -179,9 +205,18 @@ in
       modules-left = [ "hyprland/workspaces" "hyprland/window" ];
       modules-center = [ "clock" ];
       modules-right = [
-        "pulseaudio" "backlight" "battery"
+        "custom/caffeine" "pulseaudio" "backlight" "battery"
         "bluetooth" "network" "tray"
       ];
+
+      "custom/caffeine" = {
+        exec = "nyx-caffeine-status";
+        return-type = "json";
+        interval = 5;
+        signal = 9;                 # nyx-caffeine sends SIGRTMIN+9
+        on-click = "nyx-caffeine";
+        format = "{}";
+      };
 
       "hyprland/workspaces" = {
         format = "{name}";
@@ -296,12 +331,14 @@ in
       }
 
       /* One pill for the status cluster. */
-      #pulseaudio, #backlight, #battery, #bluetooth, #network {
+      #custom-caffeine, #pulseaudio, #backlight, #battery, #bluetooth, #network {
         background: ${t.bgSubtle};
         padding: 0 10px;
         margin: 5px 0;
       }
-      #pulseaudio { border-radius: 6px 0 0 6px; margin-left: 8px; }
+      #custom-caffeine { border-radius: 6px 0 0 6px; margin-left: 8px; }
+      #custom-caffeine.on  { color: ${t.amber}; }
+      #custom-caffeine.off { color: ${t.fgMuted}; }
       #network    { border-radius: 0 6px 6px 0; }
 
       #pulseaudio { color: ${t.cyan}; }
