@@ -20,7 +20,8 @@ LUKS-encrypted root · greetd/regreet · plymouth boot · Hyprland (Lua config)
 straight.el · swaybg wallpapers · Quad9 DNS over TLS · sops-nix secrets with
 declarative passwords · Bluetooth · Steam · tree-sitter grammars · voice
 dictation (whisper.cpp, local) · restic backups to Exoscale · nh/comma
-tooling · battery and performance specialisations.
+tooling · battery and performance specialisations · **Secure Boot enforcing
+with my own keys via lanzaboote**.
 
 **Suspend measured:** 85% → 79% over 8h26m in S3, about 0.7%/hour. Roughly
 six days suspended on a full charge. Clean resume, wifi survived, no wake
@@ -149,6 +150,12 @@ Menu sections: Style, Capture, Tools, Network, Nix, System, Session, Learn.
 20. **`nyx-wallpaper` keeps state in `~/.local/state/nyx/wallpaper`.** A
     stale path there survives a config change, because the old image is
     still in the store until the next GC.
+21. **`nh clean` prunes the store, not the ESP.** Without an ExecStartPost
+    of `switch-to-configuration boot`, /boot keeps UKIs for generations that
+    no longer exist — and with two specialisations each, a 1GB ESP fills.
+22. **The vault paid for itself.** SSH keys vanished from `~/.ssh` for
+    reasons never established; restored from the stick in two minutes.
+    Backups are not theoretical.
 
 ## Backups
 
@@ -181,6 +188,44 @@ sudo sh -c 'set -a; . /run/secrets/restic-s3-env; set +a; \
 ```
 
 **Losing `restic-password` loses the backups.** Keep a copy off this machine.
+
+## Secure Boot
+
+Enforcing, with my own keys. `bootctl status` reports
+`Secure Boot: enabled (user)` — "user" meaning my key hierarchy, not a
+factory chain. lanzaboote v1.1.0; earlier tags set `boot.bootspec.enable`,
+which nixpkgs removed, so anything below v1.1.0 fails to evaluate.
+
+Keys live in `/var/lib/sbctl`, backed up on the vault USB. Every generation
+and specialisation gets its own signed UKI under `/boot/EFI/Linux/`.
+
+**Three things that cost me a broken boot and a live-USB rescue:**
+
+1. **Never `sbctl sign` anything lanzaboote manages.** Signing appends bytes
+   to the file, which changes its hash. lanzaboote's stubs embed a hash of
+   the kernel and refuse to load one that does not match — every generation
+   then panics with `Kernel hash does not match`.
+2. **`/boot/EFI/nixos/kernel-*.efi` showing `✗ not signed` is CORRECT.**
+   It is the raw kernel the stub loads at boot, not a leftover and not part
+   of the signature chain. Do not sign it, do not delete it.
+3. **Never delete anything from `/boot`.** Recovery is a live USB,
+   `nixos-enter`, then `switch-to-configuration boot`. If the file was
+   signed by mistake, `sbctl remove-file` it and delete it first so
+   lanzaboote copies a clean one from the store.
+
+ThinkPad firmware also sets the immutable attribute on efivars, so
+`enroll-keys` fails until:
+
+```bash
+sudo chattr -i /sys/firmware/efi/efivars/KEK-* /sys/firmware/efi/efivars/db-*
+```
+
+That resets on every boot. And the firmware hangs on the Lenovo splash after
+any Secure Boot state change — power-cycle once before assuming failure.
+
+TPM2 is not available on this machine (`bootctl status` reports
+`TPM2 Support: no`), so TPM-backed LUKS unlock was never an option. LUKS
+passphrase at every boot, which is the right trade anyway.
 
 ## Antivirus
 
@@ -233,13 +278,9 @@ lanzaboote or `mutableUsers = false`.
 
 ## Next actions
 
-- [x] Versioning and object lock enabled on the Exoscale bucket.
-- [x] Age key and restic password in KeePassXC on the MacBook. **That
-      database is not itself backed up** — find a better home, or print them.
 - [ ] Tighten DNS to `DNSSEC = "true"` / `DNSOverTLS = "true"` once
       opportunistic mode is proven on the networks I use.
-- [ ] lanzaboote: enrol keys with `sbctl` **before** enabling, TPM2
-      `systemd-cryptenroll` only **after** (PCR 7 binds to Secure Boot state).
+- [x] Secure Boot enforcing with my own keys.
 - [ ] `thunderbolt` is blacklisted in `security.nix` — remove if using a dock.
 - [ ] External displays; dock; fingerprint reader.
 - [ ] Second host via `mkHost` — the multi-machine abstraction is untested.
