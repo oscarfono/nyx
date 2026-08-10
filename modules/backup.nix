@@ -38,7 +38,7 @@ in
     passwordFile = config.sops.secrets.restic-password.path;
     environmentFile = config.sops.secrets.restic-s3-env.path;
     initialize = false;   # deliberate: init by hand so a typo'd path does
-                          # not silently create a second empty repo
+    # not silently create a second empty repo
 
     paths = [
       "/home/${username}/.shh"          # authinfo.gpg and friends
@@ -48,6 +48,10 @@ in
       "/home/${username}/Documents"
       "/home/${username}/Projects"
       "/home/${username}/Pictures"
+
+      # Personal shell functions. Not in the nyx repo by design (see
+      # home/local.nix), so restic is the only thing that has them.
+      "/home/${username}/.config/zsh/local"
     ];
 
     exclude = [

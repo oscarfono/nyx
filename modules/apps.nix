@@ -15,8 +15,11 @@
       "steam-unwrapped"
       "steam-original"
       "steam-run"
+
+      # Security tooling. Both are commercial products with free tiers;
+      # nixpkgs ships the community/free editions but they are still
+      # non-free licences.
       "burpsuite"
-      "maltego"
     ];
 
   environment.systemPackages = with pkgs; [

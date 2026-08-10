@@ -18,6 +18,9 @@
     ./webapps.nix
     ./colours.nix
     ./msf.nix
+    ./secops.nix
+    ./report.nix
+    ./local.nix
   ];
 
   home.username = username;

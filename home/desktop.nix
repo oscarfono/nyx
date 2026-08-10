@@ -137,6 +137,10 @@ in
       local function rule(t) pcall(function() hl.window_rule(t) end) end
 
       rule({ match = { class = "^(org.keepassxc.KeePassXC)$" }, float = true })
+      -- The unlock/open-database dialog is a SEPARATE window with a
+      -- different, lowercase class. Without this it tiles behind the
+      -- floating main window and you cannot reach it.
+      rule({ match = { class = "^(keepassxc)$" }, float = true })
       rule({ match = { class = "^(pavucontrol)$" }, float = true })
       rule({ match = { class = "^(org.pulseaudio.pavucontrol)$" }, float = true })
       rule({ match = { class = "^(qalculate-gtk)$" }, float = true })
@@ -250,6 +254,11 @@ in
       "hyprland/workspaces" = {
         format = "{name}";
         on-click = "activate";
+        # on-click goes through Hyprland's IPC using the pre-Lua dispatch
+        # syntax, which current Hyprland rejects, so clicking does nothing.
+        # Scrolling over the module works because it is a plain command.
+        on-scroll-up = "nyx-ws next";
+        on-scroll-down = "nyx-ws prev";
       };
 
       "hyprland/window" = {

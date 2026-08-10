@@ -61,8 +61,10 @@
     # -----------------------------------------------------------------
     # OSINT
     # -----------------------------------------------------------------
-    maltego             # graph-based OSINT. Community Edition caps results
-                        # at 12 per transform and needs a free account.
+    # No maltego: its launcher runs a Java detector that scans hardcoded
+    # FHS paths, finds nothing on NixOS and dies with a NullPointerException
+    # before the app starts. Workable with a /usr/lib/jvm shim, but not
+    # worth carrying a shim and an unfree licence for occasional use.
     theharvester        # emails, names, subdomains from public sources
     sherlock            # username across social platforms
     holehe              # which sites an email is registered with
@@ -164,15 +166,10 @@
     '';
   };
 
-  # PostgreSQL 15+ revokes CREATE on the public schema from ordinary users,
-  # so metasploit connects, fails to create its tables, and then errors on
-  # every query. ensureDBOwnership only works when database and user names
-  # match, which they do not here, so grant it explicitly.
+  # ensureDBOwnership only works when the database name matches the user, so
+  # grant it explicitly instead.
   systemd.services.postgresql.postStart = lib.mkAfter ''
-    ${config.services.postgresql.package}/bin/psql -tAc \
-      'ALTER DATABASE msf OWNER TO "${username}";' || true
-    ${config.services.postgresql.package}/bin/psql -d msf -tAc \
-      'ALTER SCHEMA public OWNER TO "${username}";' || true
+    $PSQL -tAc 'ALTER DATABASE msf OWNER TO "${username}";' || true
   '';
 
   # Wireshark needs group membership to capture without root. The wrapper

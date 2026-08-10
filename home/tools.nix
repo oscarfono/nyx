@@ -183,6 +183,29 @@ let
     [ "$fu" -eq 0 ] && ok "no failed user units" || bad "$fu failed user unit(s): systemctl --user --failed"
 
     echo
+    echo "known issues"
+    ISSUES="$HOME/Projects/nyx/KNOWN-ISSUES.md"
+    if [ -f "$ISSUES" ]; then
+      # Entries carry a "Retest at" version. Compare it against what is
+      # installed and flag anything whose upstream may have moved on, so
+      # workarounds do not outlive the bugs they work around.
+      open_count=$(grep -c '^- \*\*Status:\*\* open' "$ISSUES" || true)
+      fixed=$(grep -c '^- \*\*Status:\*\* fixed-upstream' "$ISSUES" || true)
+      ok "$open_count open, $fixed fixed upstream (KNOWN-ISSUES.md)"
+
+      wb_have=$(${pkgs.waybar}/bin/waybar --version 2>/dev/null | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || true)
+      wb_want=$(grep -A5 '^## waybar' "$ISSUES" | grep 'Retest at' | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || true)
+      if [ -n "$wb_have" ] && [ -n "$wb_want" ]; then
+        newest=$(printf '%s\n%s\n' "$wb_have" "$wb_want" | sort -V | tail -1)
+        if [ "$newest" = "$wb_have" ] && [ "$wb_have" != "$wb_want" ]; then
+          warn "waybar is $wb_have, workaround was for < $wb_want — retest the workspace click"
+        fi
+      fi
+    else
+      warn "KNOWN-ISSUES.md not found"
+    fi
+
+    echo
     echo "bits that break quietly"
     [ -d "$HOME/.emacs.d/straight/build/eat/terminfo" ] \
       && ok "eat terminfo present" || warn "eat terminfo missing — keystrokes will duplicate"
@@ -209,6 +232,23 @@ let
     exec nyx-menu-root
   '';
 
+  # Workspace switching from a command, for anything that cannot use the
+  # Lua dispatch syntax directly (Waybar's scroll handlers, menu entries).
+  nyx-ws = pkgs.writeShellScriptBin "nyx-ws" ''
+    set -eu
+    HC=${pkgs.hyprland}/bin/hyprctl
+    cur=$($HC -j activeworkspace | ${pkgs.jq}/bin/jq -r '.id')
+
+    case "''${1:-}" in
+      next) target=$(( cur + 1 )); [ "$target" -gt 9 ] && target=1 ;;
+      prev) target=$(( cur - 1 )); [ "$target" -lt 1 ] && target=9 ;;
+      1|2|3|4|5|6|7|8|9) target="$1" ;;
+      *) echo "usage: nyx-ws [next|prev|1-9]" >&2; exit 1 ;;
+    esac
+
+    $HC dispatch "hl.dsp.focus({ workspace = $target })"
+  '';
+
 in
 {
   home.packages = [
@@ -218,6 +258,7 @@ in
     nyx-caffeine-status
     nyx-doctor
     nyx-power
+    nyx-ws
     pkgs.jq
     nyx-remind
     nyx-remind-prompt
