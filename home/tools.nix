@@ -249,6 +249,31 @@ let
     $HC dispatch "hl.dsp.focus({ workspace = $target })"
   '';
 
+  # Claude Code, scoped to one project.
+  #
+  # Starting it in ~/Projects would make every repo one directory away:
+  # project-scoped CLAUDE.md and .claude/settings.json would not apply,
+  # and a session working on one repo could read or write another. Picking
+  # a directory first keeps each session inside its own project, where the
+  # per-project config and permissions actually take effect.
+  nyx-claude = pkgs.writeShellScriptBin "nyx-claude" ''
+    set -eu
+    ROOT="$HOME/Projects"
+
+    if [ -n "''${1:-}" ]; then
+      target="$ROOT/$1"
+    else
+      choice=$(find "$ROOT" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' \
+                 | sort | ${pkgs.walker}/bin/walker --dmenu -p "Project")
+      [ -z "$choice" ] && exit 0
+      target="$ROOT/$choice"
+    fi
+
+    [ -d "$target" ] || { echo "no such project: $target" >&2; exit 1; }
+    cd "$target"
+    exec ${pkgs.ghostty}/bin/ghostty --working-directory="$target" -e claude
+  '';
+
 in
 {
   home.packages = [
@@ -259,6 +284,7 @@ in
     nyx-doctor
     nyx-power
     nyx-ws
+    nyx-claude
     pkgs.jq
     nyx-remind
     nyx-remind-prompt

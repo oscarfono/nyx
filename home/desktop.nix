@@ -74,7 +74,7 @@ in
       ${luaBind "SUPER + P" (exec "keepassxc")}
       ${luaBind "SUPER + N" (exec "nautilus")}
       ${luaBind "SUPER + C" (exec "qalculate-gtk")}
-      ${luaBind "SUPER + A" (exec "ghostty -e claude")}
+      ${luaBind "SUPER + A" (exec "nyx-claude")}
       ${luaBind "SUPER + D" (exec "nyx-dictate")}
       ${luaBind "SUPER + Space" (exec "fuzzel")}
       ${luaBind "SUPER + ALT + Space" (exec "nyx-menu-root")}
@@ -184,7 +184,7 @@ in
       SUPER P             keepassxc
       SUPER N             files (nautilus)
       SUPER C             calculator
-      SUPER A             claude code
+      SUPER A             claude code (pick a project first)
       SUPER D             dictation toggle
       SUPER Space         launcher (fuzzel)
       SUPER ALT Space     nyx menu

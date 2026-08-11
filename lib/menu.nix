@@ -34,7 +34,7 @@ in
       "󰅩  Development" = {
         submenu = {
           "󰘳  Emacs"        = { exec = "emacsclient -c -a emacs"; };
-          "󰀵  Claude Code"  = { exec = "ghostty --working-directory=$HOME/Projects -e claude"; };
+          "󰀵  Claude Code"  = { exec = "nyx-claude"; };
           "󰊢  Lazygit"      = { exec = "ghostty -e lazygit"; };
           "󰡨  Lazydocker"   = { exec = "ghostty -e lazydocker"; };
           "󱃾  k9s"          = { exec = "ghostty -e k9s"; };
