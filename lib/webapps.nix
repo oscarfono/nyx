@@ -39,6 +39,20 @@
     categories = [ "Development" ];
   };
 
+  tidal = {
+    name = "TIDAL";
+    url = "https://listen.tidal.com";
+    class = "listen.tidal.com__";
+    categories = [ "AudioVideo" "Audio" "Player" ];
+  };
+
+  youtube = {
+    name = "YouTube";
+    url = "https://youtube.com";
+    class = "youtube.com__";
+    categories = [ "AudioVideo" "Video" ];
+  };
+
   exoscale = {
     name = "Exoscale";
     url = "https://portal.exoscale.com";

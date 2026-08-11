@@ -10,7 +10,71 @@
 
 { pkgs, lib, ... }:
 
+let
+  webapps = import ./webapps.nix;
+
+  # The Web submenu is GENERATED from lib/webapps.nix rather than listed
+  # here. Two hand-maintained lists of the same thing drift within a week:
+  # add a web app there and it appears in both the launcher and this menu.
+  webMenu = lib.mapAttrs' (key: app: {
+    name = "󰖟  ${app.name}";
+    value.exec = ''brave --app="${app.url}" --class="${app.class}"'';
+  }) webapps;
+in
+
 {
+  # Applications, grouped. This is for DISCOVERY — "what do I have for
+  # X" — not for launching things you already know the name of. Type the
+  # name into fuzzel (SUPER+Space) for that; fuzzy search over a flat list
+  # beats navigating a tree every time.
+  "󰀻  Apps" = {
+    submenu = {
+      "󰖟  Web" = { submenu = webMenu; };
+
+      "󰅩  Development" = {
+        submenu = {
+          "󰘳  Emacs"        = { exec = "emacsclient -c -a emacs"; };
+          "󰀵  Claude Code"  = { exec = "ghostty --working-directory=$HOME/Projects -e claude"; };
+          "󰊢  Lazygit"      = { exec = "ghostty -e lazygit"; };
+          "󰡨  Lazydocker"   = { exec = "ghostty -e lazydocker"; };
+          "󱃾  k9s"          = { exec = "ghostty -e k9s"; };
+          "󰆼  psql (msf)"   = { exec = "ghostty -e psql -d msf"; };
+        };
+      };
+
+      "󰒃  Security" = {
+        submenu = {
+          "󰯅  Burp Suite"   = { exec = "burpsuite"; };
+          "󰯅  OWASP ZAP"    = { exec = "zap"; };
+          "󰆧  Metasploit"   = { exec = "ghostty -e msfconsole"; };
+          "󰛳  Wireshark"    = { exec = "wireshark"; };
+          "󰛳  nmap"         = { exec = "ghostty -e sh -c 'read -p \"target: \" t; nmap -A \"$t\" | less'"; };
+          "󰒃  Vulnix scan"  = { exec = "ghostty -e sh -c 'vulnix --system | less'"; };
+        };
+      };
+
+      "󰎆  Media" = {
+        submenu = {
+          "󰕾  Audio mixer"  = { exec = "pavucontrol"; };
+          "󰋩  Image viewer" = { exec = "imv"; };
+          "󰕧  mpv"          = { exec = "mpv"; };
+          "󰓓  Steam"        = { exec = "steam"; };
+        };
+      };
+
+      "󰉋  System" = {
+        submenu = {
+          "󰉋  Files"        = { exec = "nautilus"; };
+          "󰌾  KeePassXC"    = { exec = "keepassxc"; };
+          "󰃬  Calculator"   = { exec = "qalculate-gtk"; };
+          "󰈹  Firefox"      = { exec = "firefox"; };
+          "󰖟  Brave"        = { exec = "brave"; };
+          "󰆍  Terminal"     = { exec = "ghostty"; };
+        };
+      };
+    };
+  };
+
   "󰸉  Style" = {
     submenu = {
       "  Wallpaper next" = { exec = "nyx-wallpaper next"; };

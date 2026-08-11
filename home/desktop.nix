@@ -159,6 +159,10 @@ in
       rule({ match = { class = "^(brave-web.whatsapp.com__-Default)$" }, workspace = "3" })
       rule({ match = { class = "^(brave-mail.proton.me__-Default)$" }, workspace = "3" })
 
+      -- Media web apps live together, out of the way.
+      rule({ match = { class = "^(brave-listen.tidal.com__-Default)$" }, workspace = "6" })
+      rule({ match = { class = "^(brave-youtube.com__-Default)$" }, workspace = "6" })
+
       -- Media and brightness. locked = works on the lock screen.
       pcall(function()
         hl.bind("XF86AudioRaiseVolume", hl.dsp.exec_cmd("swayosd-client --output-volume raise"), { locked = true, repeating = true })

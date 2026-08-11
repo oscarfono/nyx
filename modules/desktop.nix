@@ -183,7 +183,6 @@ in
 
     # Sharing. LocalSend is the AirDrop-alike: LAN only, no account.
     localsend
-
     modemmanager
     modem-manager-gui
     libmbim
