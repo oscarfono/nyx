@@ -100,6 +100,25 @@
     signing.signByDefault = true;
     # signing.key = "YOUR-GPG-KEY-ID";
 
+    # A GLOBAL ignore file, not a per-repo .gitignore. Claude Code writes
+    # .claude/ and CLAUDE.local.md into whatever project it runs in; those
+    # are local config and session state, and must never reach a remote.
+    # Doing it globally means it holds for every repo, including ones cloned
+    # in future and ones belonging to other people.
+    #
+    # These files are still backed up: restic takes ~/Projects and only
+    # excludes .git, node_modules and build output.
+    ignores = [
+      ".claude/"
+      "CLAUDE.local.md"
+      ".claude.json"
+      ".mcp.json"
+      ".direnv/"
+      "result"
+      "result-*"
+      ".DS_Store"
+    ];
+
     settings = {
       user = {
         name = fullName;

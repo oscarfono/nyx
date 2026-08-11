@@ -163,14 +163,60 @@ in
       rule({ match = { class = "^(brave-listen.tidal.com__-Default)$" }, workspace = "6" })
       rule({ match = { class = "^(brave-youtube.com__-Default)$" }, workspace = "6" })
 
-      -- Media and brightness. locked = works on the lock screen.
-      pcall(function()
-        hl.bind("XF86AudioRaiseVolume", hl.dsp.exec_cmd("swayosd-client --output-volume raise"), { locked = true, repeating = true })
-        hl.bind("XF86AudioLowerVolume", hl.dsp.exec_cmd("swayosd-client --output-volume lower"), { locked = true, repeating = true })
-        hl.bind("XF86AudioMute", hl.dsp.exec_cmd("swayosd-client --output-volume mute-toggle"), { locked = true })
-        hl.bind("XF86MonBrightnessUp", hl.dsp.exec_cmd("swayosd-client --brightness raise"), { locked = true, repeating = true })
-        hl.bind("XF86MonBrightnessDown", hl.dsp.exec_cmd("swayosd-client --brightness lower"), { locked = true, repeating = true })
-      end)
+      -- Function keys.
+      --
+      -- Previously all five media binds sat in ONE pcall. hl.bind's third
+      -- argument (the options table) is not accepted in this Hyprland
+      -- version, so the first call threw and the remaining four were never
+      -- registered — which is why no Fn key worked, not just the exotic ones.
+      --
+      -- fnBind tries with options, falls back to a plain bind, and isolates
+      -- each key so one failure cannot take the others down.
+      local function fnBind(keys, dsp, opts)
+        if opts and pcall(function() hl.bind(keys, dsp, opts) end) then return end
+        pcall(function() hl.bind(keys, dsp) end)
+      end
+
+      local locked = { locked = true }
+      local held   = { locked = true, repeating = true }
+
+      -- F1 F2 F3  volume
+      fnBind("XF86AudioMute", hl.dsp.exec_cmd("swayosd-client --output-volume mute-toggle"), locked)
+      fnBind("XF86AudioLowerVolume", hl.dsp.exec_cmd("swayosd-client --output-volume lower"), held)
+      fnBind("XF86AudioRaiseVolume", hl.dsp.exec_cmd("swayosd-client --output-volume raise"), held)
+
+      -- F4  microphone
+      fnBind("XF86AudioMicMute", hl.dsp.exec_cmd("swayosd-client --input-volume mute-toggle"), locked)
+
+      -- F5 F6  brightness
+      fnBind("XF86MonBrightnessDown", hl.dsp.exec_cmd("swayosd-client --brightness lower"), held)
+      fnBind("XF86MonBrightnessUp", hl.dsp.exec_cmd("swayosd-client --brightness raise"), held)
+
+      -- F7  display switch. Nothing to switch to on a laptop with no
+      -- external output, so it opens the display settings instead.
+      fnBind("XF86Display", hl.dsp.exec_cmd("wdisplays"))
+
+      -- F8  airplane mode
+      fnBind("XF86RFKill", hl.dsp.exec_cmd("nyx-rfkill"))
+
+      -- F9  the cog: Nyx menu
+      fnBind("XF86Tools", hl.dsp.exec_cmd("nyx-menu-root"))
+      fnBind("XF86Launch5", hl.dsp.exec_cmd("nyx-menu-root"))
+
+      -- F10  bluetooth
+      fnBind("XF86Bluetooth", hl.dsp.exec_cmd("nyx-bluetooth-toggle"))
+
+      -- F11  keyboard glyph: the keybind cheatsheet
+      fnBind("XF86Keyboard", hl.dsp.exec_cmd("ghostty -e less ${config.xdg.configHome}/nyx/keybinds.txt"))
+      fnBind("XF86KbdBrightnessUp", hl.dsp.exec_cmd("ghostty -e less ${config.xdg.configHome}/nyx/keybinds.txt"))
+
+      -- F12  star: app launcher
+      fnBind("XF86Favorites", hl.dsp.exec_cmd("fuzzel"))
+
+      -- Media keys, if a keyboard with them ever turns up
+      fnBind("XF86AudioPlay", hl.dsp.exec_cmd("playerctl play-pause"), locked)
+      fnBind("XF86AudioNext", hl.dsp.exec_cmd("playerctl next"), locked)
+      fnBind("XF86AudioPrev", hl.dsp.exec_cmd("playerctl previous"), locked)
     '';
 
   # Cheatsheet. SUPER+K opens it.
@@ -391,6 +437,13 @@ in
   # Notifications
   # -------------------------------------------------------------------
   services.cliphist.enable = true;
+
+  # swayosd draws the volume/brightness popups the Fn keys trigger, and its
+  # libinput backend also handles capslock/numlock indicators.
+  services.swayosd = {
+    enable = true;
+    topMargin = 0.85;
+  };
 
   services.mako = {
     enable = true;

@@ -274,6 +274,30 @@ let
     exec ${pkgs.ghostty}/bin/ghostty --working-directory="$target" -e claude
   '';
 
+  # Airplane mode. rfkill toggles every radio at once, which is what the
+  # F8 key is labelled to do.
+  nyx-rfkill = pkgs.writeShellScriptBin "nyx-rfkill" ''
+    set -eu
+    if ${pkgs.util-linux}/bin/rfkill list | grep -q "Soft blocked: yes"; then
+      ${pkgs.util-linux}/bin/rfkill unblock all
+      ${pkgs.libnotify}/bin/notify-send "Airplane mode off" "Radios enabled"
+    else
+      ${pkgs.util-linux}/bin/rfkill block all
+      ${pkgs.libnotify}/bin/notify-send "Airplane mode on" "All radios disabled"
+    fi
+  '';
+
+  nyx-bluetooth-toggle = pkgs.writeShellScriptBin "nyx-bluetooth-toggle" ''
+    set -eu
+    if ${pkgs.bluez}/bin/bluetoothctl show | grep -q "Powered: yes"; then
+      ${pkgs.bluez}/bin/bluetoothctl power off
+      ${pkgs.libnotify}/bin/notify-send "Bluetooth off"
+    else
+      ${pkgs.bluez}/bin/bluetoothctl power on
+      ${pkgs.libnotify}/bin/notify-send "Bluetooth on"
+    fi
+  '';
+
 in
 {
   home.packages = [
@@ -285,6 +309,10 @@ in
     nyx-power
     nyx-ws
     nyx-claude
+    nyx-rfkill
+    nyx-bluetooth-toggle
+    pkgs.wdisplays
+    pkgs.playerctl
     pkgs.jq
     nyx-remind
     nyx-remind-prompt
