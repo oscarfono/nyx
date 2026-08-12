@@ -30,9 +30,10 @@
     # Credentials. KeePassXC with a local kdbx, no cloud vendor in the loop.
     keepassxc
 
-    # Calculator. qalculate handles units, currencies and expressions, not
-    # just arithmetic.
+    # Utilities
     qalculate-gtk
+    tree
+    unzip
 
     # Neovim is configured in home/default.nix.
 
