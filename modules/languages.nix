@@ -1,15 +1,20 @@
 { config, pkgs, lib, ... }:
 
-# Per-language tooling: LSP servers, formatters, linters.
+# Per-language tooling: runtimes, LSP servers, formatters, linters.
 #
 # Nix supplies the binaries; the editor discovers them on PATH. That keeps
 # the split clean — Emacs (eglot) and Neovim both find the same servers, and
 # neither downloads anything at runtime.
 #
-# Import from hosts/<host>/default.nix.
+# The user-side half of this module is home/languages.nix. That module sets
+# GOPATH, GOTOOLCHAIN and the fnm shell hook.
+#
+# Import from flake.nix, in desktopModules.
 
 {
   environment.systemPackages = with pkgs; [
+
+
     # Nix
     nil                       # LSP
     nixfmt-rfc-style          # formatter
@@ -29,9 +34,10 @@
     typescript-language-server
     vscode-langservers-extracted   # html, css, json, eslint
     yaml-language-server
-    nodePackages.prettier
+    prettier
 
     # Go
+    go
     gopls
     gotools
 
@@ -46,7 +52,7 @@
     # Infra
     terraform-ls
     ansible-language-server
-    dockerfile-language-server-nodejs
+    dockerfile-language-server
 
     # Markdown / prose
     marksman
@@ -55,6 +61,18 @@
     # C/C++ (also what native-comp and vterm need)
     clang-tools               # clangd + clang-format
   ];
+
+  # fnm downloads the official Node builds from nodejs.org. Those builds are
+  # dynamically linked, and they ask for a loader at
+  # /lib64/ld-linux-x86-64.so.2. That path does not exist on NixOS, so the
+  # downloaded node exits with "No such file or directory" even though the
+  # file is there. nix-ld supplies the loader and a base set of libraries.
+  # Without nix-ld, fnm installs a Node that cannot start.
+  #
+  # This also fixes the same class of failure for other downloaded binaries:
+  # language server installers, prebuilt npm native modules, and the VS Code
+  # server that a remote IDE drops in ~/.vscode-server.
+  programs.nix-ld.enable = true;
 
   # Emacs 30 uses eglot, which finds these on PATH with no configuration for
   # most languages. The mode hooks belong in .emacs.d, not here:

@@ -12,6 +12,7 @@
     ./theme.nix
     ./agents.nix
     ./treesitter.nix
+    ./languages.nix
     ./dictation.nix
     ./xdg.nix
     ./bat.nix
