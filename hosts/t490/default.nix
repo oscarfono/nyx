@@ -29,6 +29,30 @@
   services.fwupd.enable = true;
   hardware.enableRedistributableFirmware = true;
 
+  # Bind the touchpad to RMI4 over SMBus instead of the legacy PS/2
+  # Synaptics protocol.
+  #
+  # The default is auto-detection, and auto-detection declines to promote
+  # this unit. The kernel logs the fact at every boot:
+  #
+  #   psmouse serio1: synaptics: Your touchpad (PNP: LEN205b PNP0f13) says
+  #   it can support a different bus.
+  #
+  # PS/2 reports coarse coordinates and no pressure or contact-width data.
+  # libinput needs the pressure data for palm rejection and thumb
+  # rejection. Without the pressure data, libinput misreads a resting thumb
+  # and drops contacts in the middle of a gesture. Text selection jumps, and
+  # a click-and-drag stops early.
+  #
+  # RMI4 also gives the TrackPoint its own input device. On PS/2 the
+  # TrackPoint stays behind the Synaptics pass-through port, so it never
+  # enumerates and hardware.trackpoint has nothing to apply settings to.
+  #
+  # WARNING: a small number of units lose the touchpad after resume in
+  # SMBus mode. Delete this line if that happens. The boot menu timeout is
+  # 0, so hold SPACE at boot to select the previous generation.
+  boot.kernelParams = [ "psmouse.synaptics_intertouch=1" ];
+
   # Intel graphics. Yes, it is Intel. We knew what we signed up for.
   hardware.graphics = {
     enable = true;

@@ -30,6 +30,11 @@
     # Credentials. KeePassXC with a local kdbx, no cloud vendor in the loop.
     keepassxc
 
+    # Graphics and layout. Vector, raster, and page layout, in that order.
+    inkscape
+    gimp
+    scribus
+
     # Utilities
     qalculate-gtk
     tree

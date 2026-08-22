@@ -43,6 +43,10 @@
     awscli2
     azure-cli
 
+    # Payments. `stripe listen` forwards webhooks to a local port, which is
+    # the only way to test a webhook handler without a public URL.
+    stripe-cli
+
     # Containers
     docker-compose
     dive
