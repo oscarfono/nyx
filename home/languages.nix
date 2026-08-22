@@ -52,12 +52,20 @@ in
   # --version-file-strategy=recursive
   #                        also look in the parent directories, which is
   #                        what a monorepo needs
-  # --corepack-enabled     let the selected Node supply yarn and pnpm
+  # NO --corepack-enabled. That flag makes fnm run `corepack enable` after
+  # each install. Recent Node versions do not ship corepack: v26.7.0 has
+  # only node, npm and npx in bin. fnm then stops with an error:
+  #
+  #   error: Can't enable corepack: Can't spawn program:
+  #   No such file or directory (os error 2)
+  #
+  # The error stops EVERY install, so the flag costs more than it gives.
+  # For pnpm or yarn, add the nixpkgs package to modules/languages.nix.
   #
   # Order 1400 puts this after home-manager's own PATH setup at order 1000.
   # fnm must go in front of that PATH, not behind it.
   programs.zsh.initContent = lib.mkOrder 1400 ''
-    eval "$(${pkgs.fnm}/bin/fnm env --use-on-cd --version-file-strategy=recursive --corepack-enabled --shell zsh)"
+    eval "$(${pkgs.fnm}/bin/fnm env --use-on-cd --version-file-strategy=recursive --shell zsh)"
   '';
 
   # fnm keeps the installed versions in $XDG_DATA_HOME/fnm. Nothing to

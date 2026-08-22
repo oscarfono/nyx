@@ -27,11 +27,28 @@
     shfmt
 
     # Python
+    #
+    # python3 is the interpreter. basedpyright and ruff analyse code, but
+    # neither one runs code. Without python3 there is no interpreter at all.
+    python3
     basedpyright              # LSP, faster fork of pyright
     ruff                      # linter + formatter, replaces black/isort/flake8
 
     # Node
     #
+    # nodejs is the baseline, the same pattern as go above: the system
+    # supplies one version, and a per-project version manager replaces that
+    # version when a project asks for a different one. fnm shows the
+    # baseline as the `system` version.
+    #
+    # Without a baseline, a directory that has no .node-version file gives
+    # no node at all.
+    #
+    # CAUTION: `npm install -g` fails against the baseline, because the
+    # baseline lives in the read-only store. Select an fnm version first,
+    # then install the global package.
+    nodejs
+
     # fnm must be on PATH, not only in the eval in home/languages.nix.
     # `fnm env --use-on-cd` writes a zsh hook that calls `fnm` by name:
     #
