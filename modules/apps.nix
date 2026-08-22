@@ -3,6 +3,17 @@
 # Everything a user actually launches. Opinionated by design.
 # Emacs lives in modules/emacs.nix, not here.
 
+let
+  # Force-installed browser extensions. Brave and Chromium both read the
+  # Chrome policy format, and both use the same Web Store, so one entry
+  # serves both policies below.
+  #
+  # The format is "<extension ID>;<update URL>". Read the ID from the
+  # address bar on the Web Store page, or from the directory name under
+  # Default/Extensions in the browser profile.
+  claudeInChrome =
+    "fcoeoabgfenejglbffodgkkbkcdhcgfn;https://clients2.google.com/service/update2/crx";
+in
 {
   # Unfree is opt-in per package. This list is the complete inventory of
   # non-free software on the machine.
@@ -27,6 +38,10 @@
     brave
     firefox
 
+    # Chromium, for the Claude extension and for testing a page against
+    # stock Chrome behaviour. Brave changes enough to hide a bug.
+    chromium
+
     # Credentials. KeePassXC with a local kdbx, no cloud vendor in the loop.
     keepassxc
 
@@ -49,6 +64,8 @@
   # Brave, de-fanged. Managed policy is the supported way to do this and it
   # survives updates, unlike poking at the profile directory.
   environment.etc."brave/policies/managed/nyx.json".text = builtins.toJSON {
+    ExtensionInstallForcelist = [ claudeInChrome ];
+
     BraveRewardsDisabled = true;
     BraveWalletDisabled = true;
     BraveVPNDisabled = true;
@@ -56,6 +73,26 @@
     TorDisabled = false;
     MetricsReportingEnabled = false;
     SafeBrowsingExtendedReportingEnabled = false;
+    SearchSuggestEnabled = false;
+    PasswordManagerEnabled = false; # KeePassXC does this job
+    SyncDisabled = true;
+    DefaultSearchProviderEnabled = true;
+    DefaultSearchProviderName = "DuckDuckGo";
+    DefaultSearchProviderSearchURL = "https://duckduckgo.com/?q={searchTerms}";
+  };
+
+  # Chromium policy. Managed policy is the only declarative way to install
+  # an extension: an extension that you add from the Web Store lives in the
+  # profile directory, and no rebuild can recreate that extension.
+  #
+  # CAUTION: a forced extension is not removable from the browser. Delete
+  # the entry from claudeInChrome above, then rebuild, to remove the
+  # extension from both browsers.
+  environment.etc."chromium/policies/managed/nyx.json".text = builtins.toJSON {
+    ExtensionInstallForcelist = [ claudeInChrome ];
+
+    # Same posture as the Brave policy above.
+    MetricsReportingEnabled = false;
     SearchSuggestEnabled = false;
     PasswordManagerEnabled = false; # KeePassXC does this job
     SyncDisabled = true;
