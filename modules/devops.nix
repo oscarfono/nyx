@@ -90,7 +90,9 @@
 
     # Shell quality of life
     nvd          # nix version diff, used by nh
-    comma        # `, <command>` runs something you do not have installed
+    # No plain `comma` here. programs.nix-index-database.comma.enable below
+    # installs a comma that knows where the database is. Two comma packages
+    # in systemPackages collide.
 
     ripgrep
     fd
@@ -129,12 +131,21 @@
 
   # comma: run a program you do not have, once, without installing it.
   #   , cowsay hello
-  # Needs the nix-index database; see the note in CHEATSHEET.md.
+  #
+  # comma and the command-not-found handler both read the nix-index
+  # database. programs.nix-index does NOT build that database. The
+  # `nix-index` command builds it, and that command reads all of nixpkgs:
+  # on a 16GB machine it exhausts the memory and the OOM killer stops it.
+  #
+  # The nix-index-database flake input supplies a prebuilt database, and
+  # its module points nix-index and comma at that database. See the
+  # nix-index section in CHEATSHEET.md.
   programs.command-not-found.enable = false;   # replaced by nix-index
   programs.nix-index = {
     enable = true;
     enableZshIntegration = true;
   };
+  programs.nix-index-database.comma.enable = true;
 
   programs.direnv = {
     enable = true;

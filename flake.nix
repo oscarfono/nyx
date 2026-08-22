@@ -11,6 +11,22 @@
 
     nixos-hardware.url = "github:NixOS/nixos-hardware/master";
 
+    # A prebuilt nix-index database, refreshed weekly upstream.
+    #
+    # programs.nix-index installs the command-not-found handler, but it does
+    # not build the database. The `nix-index` command builds the database,
+    # and that command reads all of nixpkgs. On a 16GB machine the command
+    # exhausts the memory and the OOM killer stops it, so the database never
+    # appears. Then every unknown command fails with an I/O error, and
+    # `comma` cannot work at all.
+    #
+    # This input supplies the database as a store path instead. Run
+    # `nix flake update` to get a newer one.
+    nix-index-database = {
+      url = "github:nix-community/nix-index-database";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+
     # Declarative secrets. Nothing plaintext in the repo.
     sops-nix = {
       url = "github:Mic92/sops-nix";
@@ -25,7 +41,7 @@
     };
   };
 
-  outputs = { self, nixpkgs, home-manager, nixos-hardware, sops-nix, lanzaboote, ... }@inputs:
+  outputs = { self, nixpkgs, home-manager, nixos-hardware, sops-nix, lanzaboote, nix-index-database, ... }@inputs:
     let
       system = "x86_64-linux";
 
@@ -59,6 +75,7 @@
             ++ [
               sops-nix.nixosModules.sops
               lanzaboote.nixosModules.lanzaboote
+              nix-index-database.nixosModules.nix-index
               hostPath
               { networking.hostName = hostName; }
             ]

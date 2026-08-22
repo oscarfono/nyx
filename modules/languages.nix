@@ -30,6 +30,17 @@
     basedpyright              # LSP, faster fork of pyright
     ruff                      # linter + formatter, replaces black/isort/flake8
 
+    # Node
+    #
+    # fnm must be on PATH, not only in the eval in home/languages.nix.
+    # `fnm env --use-on-cd` writes a zsh hook that calls `fnm` by name:
+    #
+    #   _fnm_autoload_hook () { fnm use --silent-if-unchanged }
+    #
+    # The hook runs on every cd. If fnm is not on PATH, each cd fails with
+    # "fnm: command not found".
+    fnm
+
     # Web / JSON / YAML
     typescript-language-server
     vscode-langservers-extracted   # html, css, json, eslint

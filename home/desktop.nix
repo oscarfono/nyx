@@ -62,7 +62,19 @@ in
         input = {
           kb_layout = "us",
           follow_mouse = 1,
-          touchpad = { natural_scroll = true },
+          -- drag_lock keeps the button held for a moment after the finger
+          -- lifts. Without drag_lock, a drag stops as soon as you lift to
+          -- reposition, so a long drag across a small touchpad fails.
+          --
+          -- clickfinger_behavior makes one finger a left click anywhere on
+          -- the pad. The default splits the bottom edge into left and right
+          -- button zones, so a drag that starts in the bottom right corner
+          -- gives a right click and a context menu.
+          touchpad = {
+            natural_scroll = true,
+            drag_lock = 1,
+            clickfinger_behavior = true,
+          },
         },
       })
 

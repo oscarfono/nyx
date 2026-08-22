@@ -40,6 +40,42 @@ Unfree packages must also be added to the allow-list in `modules/apps.nix`.
 That list is deliberate: it is the complete inventory of non-free software
 on the machine.
 
+## nix-index, comma, and command-not-found
+
+Three things read one database:
+
+- `command-not-found` — the shell tells you which package supplies a
+  command that you typed but do not have
+- `nix-locate bin/foo` — find the package that supplies a file
+- `, foo` — run a program one time, without an install
+
+```bash
+nix-locate --whole-name bin/scribus   # which package gives me this binary?
+nix-locate --minimal bin/scribus      # attribute name only
+, cowsay hello                        # run cowsay once, do not install it
+```
+
+The database comes from the `nix-index-database` flake input. Do NOT run
+`nix-index` to build the database. That command reads all of nixpkgs, and
+on 16GB the command exhausts the memory. The OOM killer then stops the
+command, and the terminal dies with it.
+
+To get a newer database, update the flake:
+
+```bash
+nix flake update nix-index-database
+sudo nixos-rebuild switch --flake ~/Projects/nyx#beta
+```
+
+The database matches the nixpkgs revision that upstream indexed, not
+yours. A package that arrived in nixpkgs this week can be absent from the
+database. This affects the search only. It never affects what you install.
+
+If `command-not-found` reports an I/O error at
+`~/.cache/nix-index/files`, the wiring is broken. That path is the old
+location for a database that you build yourself. Make sure that
+`flake.nix` still imports `nix-index-database.nixosModules.nix-index`.
+
 ## Nyx commands
 
 ```bash
