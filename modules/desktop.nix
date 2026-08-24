@@ -175,6 +175,13 @@ in
     wl-clipboard
     cliphist
 
+    # Input diagnosis. `libinput list-devices` shows how libinput classified
+    # the touchpad and which options apply. `libinput debug-events` prints
+    # the events as they arrive, which tells you if a lost click was the
+    # hardware, libinput, or Hyprland. `wev` does the same for Wayland keys.
+    libinput
+    wev
+
     # Controls
     brightnessctl
     playerctl

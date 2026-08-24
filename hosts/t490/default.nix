@@ -44,9 +44,16 @@
   # and drops contacts in the middle of a gesture. Text selection jumps, and
   # a click-and-drag stops early.
   #
-  # RMI4 also gives the TrackPoint its own input device. On PS/2 the
-  # TrackPoint stays behind the Synaptics pass-through port, so it never
-  # enumerates and hardware.trackpoint has nothing to apply settings to.
+  # RMI4 creates a PS/2 pass-through port for the TrackPoint:
+  #
+  #   serio: RMI4 PS/2 pass-through port at rmi4-00.fn03
+  #
+  # On this unit no TrackPoint device appears behind that port. The only
+  # pointer in /proc/bus/input/devices is "Synaptics TM3471-020". So
+  # hardware.trackpoint applies to nothing here, and trackpoint.service
+  # matches a device name (TPPS/2 IBM TrackPoint) that never exists. The
+  # service still reports success, because udevadm trigger finds no match
+  # and exits 0. Do not read that success as proof the settings applied.
   #
   # WARNING: a small number of units lose the touchpad after resume in
   # SMBus mode. Delete this line if that happens. The boot menu timeout is

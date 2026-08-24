@@ -62,18 +62,52 @@ in
         input = {
           kb_layout = "us",
           follow_mouse = 1,
-          -- drag_lock keeps the button held for a moment after the finger
-          -- lifts. Without drag_lock, a drag stops as soon as you lift to
-          -- reposition, so a long drag across a small touchpad fails.
-          --
-          -- clickfinger_behavior makes one finger a left click anywhere on
-          -- the pad. The default splits the bottom edge into left and right
-          -- button zones, so a drag that starts in the bottom right corner
-          -- gives a right click and a context menu.
           touchpad = {
             natural_scroll = true,
+
+            -- disable_while_typing defaults to ON, and the default is the
+            -- cause of most "the touchpad ignored me" behaviour.
+            --
+            -- libinput discards touchpad events for a short time after each
+            -- keystroke. It also CANCELS a touch that is already in
+            -- progress. Three symptoms come from this one default:
+            --
+            --   1. You type in a terminal, then drag to select the output.
+            --      The drag starts inside the dead time, so nothing
+            --      highlights.
+            --   2. A selection that crosses many lines stops part way,
+            --      because a keystroke landed during the drag.
+            --   3. You press a hotkey to open a menu, then click an entry.
+            --      The hotkey started the dead time, so the click is lost
+            --      and the program does not start.
+            --
+            -- The touchpad reports pressure over RMI4, so libinput rejects
+            -- a resting palm on pressure alone. The typing timer adds
+            -- little here, and it costs the three failures above.
+            disable_while_typing = false,
+
+            -- clickfinger_behavior counts the fingers on the pad to choose
+            -- the button: one finger is left, two fingers are right.
+            --
+            -- That breaks the normal way to select many lines, which is to
+            -- hold the button down with the thumb and drag with a second
+            -- finger. libinput counts two fingers, so the drag becomes a
+            -- right click or a two-finger scroll. The selection stops and
+            -- the view scrolls instead.
+            --
+            -- false selects button areas. The bottom left of the pad is the
+            -- left button, so a thumb there plus a second finger dragging
+            -- gives a normal click-and-drag.
+            --
+            -- CAUTION: with button areas the bottom RIGHT corner is the
+            -- right button. Start a drag from the bottom left, not the
+            -- bottom right, or you get a context menu.
+            clickfinger_behavior = false,
+
+            -- drag_lock keeps the button held for a moment after the finger
+            -- lifts. Without drag_lock, a drag stops as soon as you lift to
+            -- reposition, so a long drag across a small touchpad fails.
             drag_lock = 1,
-            clickfinger_behavior = true,
           },
         },
       })

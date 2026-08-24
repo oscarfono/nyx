@@ -96,7 +96,8 @@ in
   "󱐋  Tools" = {
     submenu = {
       "󰀵  Claude"          = { exec = "ghostty -e claude"; };
-      "󰄄  Share a file"    = { exec = "localsend"; };
+      # The package is localsend, but the binary is localsend_app.
+      "󰄄  Share a file"    = { exec = "localsend_app"; };
       "󰍬  Dictate"         = { exec = "nyx-dictate"; };
       "󰅐  Set a reminder"  = { exec = "nyx-remind-prompt"; };
       "󰕧  Record toggle"   = { exec = "nyx-record"; };
