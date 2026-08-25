@@ -9,11 +9,14 @@
 let
   apps = import ../lib/webapps.nix;
 
+  # Shared with lib/menu.nix. Read that file before you change the quoting.
+  command = import ../lib/webapp-command.nix;
+
   mkDesktop = key: app: {
     name = "nyx-webapp-${key}";
     value = {
       name = app.name;
-      exec = ''brave --app="${app.url}" --class="${app.class}"'';
+      exec = command app;
       icon = app.icon or "brave-browser";
       categories = app.categories or [ "Network" ];
       terminal = false;

@@ -16,9 +16,14 @@ let
   # The Web submenu is GENERATED from lib/webapps.nix rather than listed
   # here. Two hand-maintained lists of the same thing drift within a week:
   # add a web app there and it appears in both the launcher and this menu.
+  # The start command comes from lib/webapp-command.nix, which home/webapps.nix
+  # also uses. Two copies of the same command line drift, and one copy already
+  # did: the .desktop copy used a quote form that fuzzel rejects.
+  command = import ./webapp-command.nix;
+
   webMenu = lib.mapAttrs' (key: app: {
     name = "󰖟  ${app.name}";
-    value.exec = ''brave --app="${app.url}" --class="${app.class}"'';
+    value.exec = command app;
   }) webapps;
 in
 
