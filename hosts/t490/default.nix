@@ -12,6 +12,7 @@
     ../../modules/security.nix
     ../../modules/secops.nix
     ../../modules/bluetooth.nix
+    ../../modules/proton.nix
     ../../modules/gaming.nix
     ../../modules/backup.nix
   ];

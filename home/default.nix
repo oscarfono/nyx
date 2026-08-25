@@ -19,6 +19,7 @@
     ./webapps.nix
     ./colours.nix
     ./msf.nix
+    ./proton.nix
     ./secops.nix
     ./report.nix
     ./local.nix
