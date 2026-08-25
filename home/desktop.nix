@@ -104,10 +104,35 @@ in
             -- bottom right, or you get a context menu.
             clickfinger_behavior = false,
 
-            -- drag_lock keeps the button held for a moment after the finger
-            -- lifts. Without drag_lock, a drag stops as soon as you lift to
-            -- reposition, so a long drag across a small touchpad fails.
-            drag_lock = 1,
+            -- tap_and_drag and drag_lock are the cause of erratic
+            -- highlighting. Both were ON: tap_and_drag is a Hyprland
+            -- default, and drag_lock was set here to help a long drag.
+            --
+            -- The two settings combine badly with disable_while_typing =
+            -- false above. The chain is:
+            --
+            --   1. The palm or the thumb touches the pad while you type.
+            --      disable_while_typing no longer removes that touch.
+            --   2. tap-to-click turns the touch into a tap.
+            --   3. tap_and_drag turns the tap plus the next movement into
+            --      a drag. The left button goes down.
+            --   4. drag_lock HOLDS the button down after the finger lifts.
+            --
+            -- Text then highlights on its own, and the highlight continues
+            -- after you take the finger off the pad. A later tap releases
+            -- the button at a random point.
+            --
+            -- A libinput trace proves the pad itself is good. Three drags
+            -- gave a clean BTN_LEFT press, ~1s of motion, and a release.
+            -- That trace used the libinput defaults, which are dl off. The
+            -- faults come from this file, not from the hardware.
+            --
+            -- Now a drag needs a real press of the pad. A tap can no
+            -- longer start a drag, and the button can no longer stay down.
+            -- The thumb-in-the-corner plus finger-drag gesture still
+            -- works, because clickfinger_behavior above stays false.
+            tap_and_drag = false,
+            drag_lock = 0,
           },
         },
       })
