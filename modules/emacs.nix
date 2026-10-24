@@ -5,7 +5,9 @@
 # two package managers on one load-path is the failure mode.
 
 let
-  emacsPkg = pkgs.emacs30-pgtk;
+  # nixpkgs dropped the version-numbered aliases in August 2026. emacs-pgtk
+  # always tracks the current stable Emacs.
+  emacsPkg = pkgs.emacs-pgtk;
 in
 {
   environment.systemPackages = [
@@ -33,9 +35,12 @@ in
     # variants. Set them per-buffer with:
     #   (setq ispell-dictionary "en_AU")
     # after ispell-program-name is aspell, or use hunspell if you want a
-    # dedicated en_AU. aspellDicts.en-computers is handy for code buffers.
+    # dedicated en_AU.
+    #
+    # nixpkgs removed aspellDicts.en-computers, the technical word list for
+    # code buffers. The upstream domain lapsed, and a gambling site took the
+    # address. There is no replacement dictionary.
     pkgs.aspellDicts.en
-    pkgs.aspellDicts.en-computers
 
     # early-init.el sets auth-sources to a .gpg file, so gpg must be present
     # before the first frame. pinentry is configured in modules/devops.nix.

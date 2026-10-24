@@ -133,8 +133,12 @@ in
   # The T490 has an M.2 WWAN slot and a SIM tray, but the modem card is a
   # build-time option and many units ship without it. Harmless if absent:
   # ModemManager simply finds no device. See SUMMARY.md for how to check.
+  # nixpkgs removed networkmanager-fortisslvpn as insecure, and the upstream
+  # project is archived. networkmanager-openconnect replaces the plugin.
+  # OpenConnect speaks the Fortinet SSL VPN protocol, so the same gateways
+  # still work. Recreate a Fortinet connection to select the new type.
   networking.networkmanager.plugins = with pkgs; [
-    networkmanager-fortisslvpn
+    networkmanager-openconnect
     networkmanager-openvpn
   ];
   services.udev.packages = [ pkgs.modemmanager ];

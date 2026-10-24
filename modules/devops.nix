@@ -41,7 +41,17 @@
 
     # Cloud
     awscli2
-    azure-cli
+
+    # azure-cli is disabled, because the package does not evaluate.
+    #
+    # azure-cli needs python3Packages.fabric for the `az sf` (Service Fabric)
+    # commands. nixpkgs marks fabric as broken, because fabric accepts only
+    # invoke 2.x and nixpkgs now has invoke 3.0.3. See fabric issue 2376.
+    # nixpkgs has no invoke 2.x package, so an override cannot repair this.
+    #
+    # To restore azure-cli, remove the comment below. Do this after nixpkgs
+    # marks fabric as good again.
+    # azure-cli
 
     # Payments. `stripe listen` forwards webhooks to a local port, which is
     # the only way to test a webhook handler without a public URL.
