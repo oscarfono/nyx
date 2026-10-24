@@ -256,9 +256,18 @@ let
   # and a session working on one repo could read or write another. Picking
   # a directory first keeps each session inside its own project, where the
   # per-project config and permissions actually take effect.
+  # `nyx-claude --unattended` starts the session through
+  # nyx-claude-unattended, which bypasses the permission prompts and holds
+  # the idle timers off. Read the warning on that script before you use it.
   nyx-claude = pkgs.writeShellScriptBin "nyx-claude" ''
     set -eu
     ROOT="$HOME/Projects"
+
+    unattended=""
+    if [ "''${1:-}" = "--unattended" ]; then
+      unattended=1
+      shift
+    fi
 
     if [ -n "''${1:-}" ]; then
       target="$ROOT/$1"
@@ -271,7 +280,59 @@ let
 
     [ -d "$target" ] || { echo "no such project: $target" >&2; exit 1; }
     cd "$target"
+
+    if [ -n "$unattended" ]; then
+      exec ${pkgs.ghostty}/bin/ghostty --working-directory="$target" \
+        -e nyx-claude-unattended
+    fi
+
     exec ${pkgs.ghostty}/bin/ghostty --working-directory="$target" -e claude
+  '';
+
+  # The unattended half of nyx-claude. This script runs INSIDE the terminal.
+  #
+  # WARNING: this session answers every permission prompt with yes. Claude
+  # can change or delete any file that your account can write, and Claude can
+  # reach the network. Start it only in a repository that git tracks, and only
+  # when you can repair a bad result. Push your work first.
+  #
+  # The idle hold belongs in this script, not in the launcher. hypridle runs
+  # `systemctl suspend` after 15 minutes of no input (see the listener list in
+  # home/desktop.nix), and a suspend stops the run. An unattended run gets no
+  # input by definition, so it always hits that timeout. Only a process with
+  # the same lifetime as claude can hold the timers off for the whole run, and
+  # the launcher is not that process: ghostty can pass the window to an
+  # existing instance and then exit.
+  #
+  # The waybar caffeine indicator reads the hypridle unit state, so it shows
+  # caffeine while this script runs. The script signals waybar to refresh.
+  nyx-claude-unattended = pkgs.writeShellScriptBin "nyx-claude-unattended" ''
+    set -eu
+
+    idle_was_active=""
+    if systemctl --user is-active --quiet hypridle; then
+      idle_was_active=1
+      systemctl --user stop hypridle
+      pkill -SIGRTMIN+9 waybar 2>/dev/null || true
+    fi
+
+    # Start the idle timers again whatever stops claude: a clean exit, a
+    # crash, or a closed window.
+    restore() {
+      if [ -n "$idle_was_active" ]; then
+        systemctl --user start hypridle || true
+        pkill -SIGRTMIN+9 waybar 2>/dev/null || true
+      fi
+    }
+    trap restore EXIT INT TERM
+
+    printf 'Unattended Claude Code in %s\n' "$PWD"
+    printf 'Permission prompts are bypassed. Idle suspend is off until this exits.\n\n'
+
+    claude --dangerously-skip-permissions "$@" || true
+
+    printf '\nSession ended. Idle timers are restored. Press any key to close.\n'
+    read -r -n1 _ || true
   '';
 
   # Airplane mode. rfkill toggles every radio at once, which is what the
@@ -309,6 +370,7 @@ in
     nyx-power
     nyx-ws
     nyx-claude
+    nyx-claude-unattended
     nyx-rfkill
     nyx-bluetooth-toggle
     pkgs.wdisplays

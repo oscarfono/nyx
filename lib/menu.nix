@@ -40,6 +40,10 @@ in
         submenu = {
           "󰘳  Emacs"        = { exec = "emacsclient -c -a emacs"; };
           "󰀵  Claude Code"  = { exec = "nyx-claude"; };
+          # Bypasses every permission prompt and holds idle suspend off, so
+          # the run continues while nobody watches. See the warning on
+          # nyx-claude-unattended in home/tools.nix.
+          "󰀵  Claude (unattended)" = { exec = "nyx-claude --unattended"; };
           "󰊢  Lazygit"      = { exec = "ghostty -e lazygit"; };
           "󰡨  Lazydocker"   = { exec = "ghostty -e lazydocker"; };
           "󱃾  k9s"          = { exec = "ghostty -e k9s"; };
