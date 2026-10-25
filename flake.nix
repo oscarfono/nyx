@@ -39,6 +39,22 @@
       url = "github:nix-community/lanzaboote/v1.1.0";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+
+    # Caelestia, a Quickshell desktop shell. One process draws the bar, the
+    # launcher, the notifications, the OSD and the panels.
+    #
+    # This input supplies the home-manager MODULE only. home-manager has no
+    # module of its own for caelestia.
+    #
+    # CAUTION: do not use the package from this flake. The flake builds
+    # quickshell from git with clang, and the binary cache holds no such
+    # build, so the package compiles Qt and quickshell from source. That
+    # build takes hours on this machine. home/caelestia.nix sets `package`
+    # to the nixpkgs build, and the cache holds that build.
+    caelestia = {
+      url = "github:caelestia-dots/shell";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
   outputs = { self, nixpkgs, home-manager, nixos-hardware, sops-nix, lanzaboote, nix-index-database, ... }@inputs:

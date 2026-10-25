@@ -265,16 +265,16 @@ in
       local held   = { locked = true, repeating = true }
 
       -- F1 F2 F3  volume
-      fnBind("XF86AudioMute", hl.dsp.exec_cmd("swayosd-client --output-volume mute-toggle"), locked)
-      fnBind("XF86AudioLowerVolume", hl.dsp.exec_cmd("swayosd-client --output-volume lower"), held)
-      fnBind("XF86AudioRaiseVolume", hl.dsp.exec_cmd("swayosd-client --output-volume raise"), held)
+      fnBind("XF86AudioMute", hl.dsp.exec_cmd("wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle"), locked)
+      fnBind("XF86AudioLowerVolume", hl.dsp.exec_cmd("wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%-"), held)
+      fnBind("XF86AudioRaiseVolume", hl.dsp.exec_cmd("wpctl set-volume -l 1.0 @DEFAULT_AUDIO_SINK@ 5%+"), held)
 
       -- F4  microphone
-      fnBind("XF86AudioMicMute", hl.dsp.exec_cmd("swayosd-client --input-volume mute-toggle"), locked)
+      fnBind("XF86AudioMicMute", hl.dsp.exec_cmd("wpctl set-mute @DEFAULT_AUDIO_SOURCE@ toggle"), locked)
 
       -- F5 F6  brightness
-      fnBind("XF86MonBrightnessDown", hl.dsp.exec_cmd("swayosd-client --brightness lower"), held)
-      fnBind("XF86MonBrightnessUp", hl.dsp.exec_cmd("swayosd-client --brightness raise"), held)
+      fnBind("XF86MonBrightnessDown", hl.dsp.exec_cmd("brightnessctl set 5%-"), held)
+      fnBind("XF86MonBrightnessUp", hl.dsp.exec_cmd("brightnessctl set 5%+"), held)
 
       -- F7  display switch. Nothing to switch to on a laptop with no
       -- external output, so it opens the display settings instead.
@@ -350,8 +350,19 @@ in
   # -------------------------------------------------------------------
   # Waybar
   # -------------------------------------------------------------------
+  # Waybar is OFF. The caelestia shell draws the bar now, see
+  # home/caelestia.nix.
+  #
+  # Waybar also owned org.kde.StatusNotifierWatcher, which is the service
+  # that the tray icons register with. caelestia owns that name now. Two
+  # bars at once gives 2 bars on screen, and the second one to start fails
+  # to own the name.
+  #
+  # The settings below stay, because the settings are the fallback. Set
+  # enable to true, and set programs.caelestia.enable to false in
+  # home/caelestia.nix, and the old bar comes back.
   programs.waybar = {
-    enable = true;
+    enable = false;
     systemd.enable = true;
     settings.mainBar = {
       layer = "top";
@@ -414,16 +425,16 @@ in
         format-icons.default = [ "󰕿" "󰖀" "󰕾" ];
         tooltip-format = "{desc} at {volume}%";
         on-click = "pavucontrol";
-        on-scroll-up = "swayosd-client --output-volume raise";
-        on-scroll-down = "swayosd-client --output-volume lower";
+        on-scroll-up = "wpctl set-volume -l 1.0 @DEFAULT_AUDIO_SINK@ 5%+";
+        on-scroll-down = "wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%-";
       };
 
       backlight = {
         format = "{icon} {percent}%";
         format-icons = [ "󰃞" "󰃟" "󰃠" ];
         tooltip-format = "Screen brightness {percent}%";
-        on-scroll-up = "swayosd-client --brightness raise";
-        on-scroll-down = "swayosd-client --brightness lower";
+        on-scroll-up = "brightnessctl set 5%+";
+        on-scroll-down = "brightnessctl set 5%-";
       };
 
       battery = {
@@ -522,15 +533,36 @@ in
   # -------------------------------------------------------------------
   services.cliphist.enable = true;
 
-  # swayosd draws the volume/brightness popups the Fn keys trigger, and its
-  # libinput backend also handles capslock/numlock indicators.
+  # swayosd is OFF. The caelestia shell draws the volume and brightness
+  # popups now, see home/caelestia.nix.
+  #
+  # The Fn keys called swayosd-client, which changed the value AND drew the
+  # popup. The keys now call wpctl and brightnessctl, which change the value
+  # only. caelestia reads Pipewire and the backlight directly, so the OSD
+  # appears whatever changes the value.
+  #
+  # ONE loss: swayosd also drew the capslock and numlock indicators from its
+  # libinput backend. caelestia shows the volume, the brightness and the
+  # microphone, and caelestia has no capslock indicator.
+  #
+  # The settings below stay as the fallback.
   services.swayosd = {
-    enable = true;
+    enable = false;
     topMargin = 0.85;
   };
 
+  # Mako is OFF. The caelestia shell shows the notifications now, see
+  # home/caelestia.nix.
+  #
+  # Only ONE process can own the org.freedesktop.Notifications name on the
+  # bus. So mako and caelestia cannot both run: the second one to start
+  # gets no notifications, and nothing says why. This is not a cosmetic
+  # overlap.
+  #
+  # The settings below stay as the fallback, in the same way as the waybar
+  # settings above.
   services.mako = {
-    enable = true;
+    enable = false;
     settings = {
       background-color = t.bg;
       text-color = t.fg;

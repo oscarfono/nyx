@@ -1,4 +1,4 @@
-{ config, pkgs, lib, username, fullName, email, hostName, ... }:
+{ config, pkgs, lib, inputs, username, fullName, email, hostName, ... }:
 
 # User layer. Everything here is Nyx's own.
 
@@ -6,6 +6,7 @@
   imports = [
     ./emacs.nix
     ./desktop.nix
+    ./caelestia.nix
     ./menu.nix
     ./wallpaper.nix
     ./tools.nix
