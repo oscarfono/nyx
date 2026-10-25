@@ -35,12 +35,28 @@ in
 
   environment.systemPackages = with pkgs; [
     # Browsers. Brave is the default, Firefox is the escape hatch.
-    brave
+    #
+    # --disable-pinch stops the page from zooming while you scroll.
+    #
+    # The touchpad is a full multitouch device: it reports a slot, a
+    # position, an orientation and a pressure for each finger. So libinput
+    # detects a pinch, and libinput sends the pinch to the window. A
+    # two-finger scroll rarely keeps the fingers at one distance, and
+    # libinput reads that change of distance as a pinch. Chromium zooms the
+    # page for a pinch, which is why a scroll zooms the page and you then
+    # type CTRL+0 to repair the zoom.
+    #
+    # The flag removes pinch zoom from Brave only. CTRL+PLUS, CTRL+MINUS
+    # and CTRL+0 still change the zoom. Scrolling and the 3-finger
+    # workspace swipe are untouched, because both are separate gestures.
+    (brave.override { commandLineArgs = "--disable-pinch"; })
     firefox
 
     # Chromium, for the Claude extension and for testing a page against
     # stock Chrome behaviour. Brave changes enough to hide a bug.
-    chromium
+    #
+    # Same flag as Brave, for the same reason.
+    (chromium.override { commandLineArgs = "--disable-pinch"; })
 
     # Credentials. KeePassXC with a local kdbx, no cloud vendor in the loop.
     keepassxc
