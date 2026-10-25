@@ -97,9 +97,21 @@ in
 
   # Seed the library from the repo. `C` copies only if the target does not
   # exist, so anything you add or delete afterwards is left alone.
+  #
+  # A tmpfiles line has 6 fields after the type: path, mode, user, group,
+  # age, argument. A `C` line puts the source in the argument field, so the
+  # age field must hold a `-` placeholder. The age field is easy to forget,
+  # because a `d` line needs no argument and stops at the age field.
+  #
+  # systemd does not report an error for a `C` line that has no argument.
+  # systemd drops the line. These rules had 5 fields until October 2026, so
+  # the store path sat in the age field, and the library stayed empty.
+  # Test a change to these rules with:
+  #   systemd-tmpfiles --user --create --dry-run ~/.config/user-tmpfiles.d/home-manager.conf
+  # Each `C` line must print a "Would copy tree" message.
   systemd.user.tmpfiles.rules =
     [ "d ${library} 0755 - - -" ]
-    ++ map (w: "C ${library}/${builtins.baseNameOf w} 0644 - - ${w}") seeded;
+    ++ map (w: "C ${library}/${builtins.baseNameOf w} 0644 - - - ${w}") seeded;
 
   systemd.user.services.nyx-wallpaper = {
     Unit = {
