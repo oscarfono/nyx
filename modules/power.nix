@@ -10,8 +10,31 @@
   # Verify with: cat /sys/power/mem_sleep
   boot.kernelParams = [ "mem_sleep_default=deep" ];
 
-  # suspend-then-hibernate needs swap >= RAM; not configured, so plain
-  # suspend for now.
+  # ---------------------------------------------------------------------
+  # Swap
+  # ---------------------------------------------------------------------
+  # zram is compressed swap in RAM. This machine had no swap of any kind,
+  # so a process that asked for the last of the 16GB met the OOM killer
+  # with no warning. The emacs daemon reached 1.7GB during the native
+  # recompile for emacs 31, which shows the headroom is not theoretical.
+  #
+  # zram gives that headroom without a disk partition, so zram changes
+  # nothing about LUKS and nothing about the boot path.
+  #
+  # zram does NOT make hibernate possible. Hibernate needs a DISK swap area
+  # that is at least the size of RAM, and the kernel needs a `resume=`
+  # parameter that points at the swap area. On this machine the swap area
+  # would sit inside the LUKS container, so the initrd must open the
+  # container before the initrd resumes. That change belongs in its own
+  # generation, with a live USB at hand.
+  zramSwap = {
+    enable = true;
+    algorithm = "zstd";
+    memoryPercent = 50;
+  };
+
+  # suspend-then-hibernate needs a disk swap area >= RAM; see the zram note
+  # above for why this machine has none. Plain suspend for now.
   services.logind.settings.Login = {
     HandleLidSwitch = "suspend";
     HandleLidSwitchExternalPower = "suspend";

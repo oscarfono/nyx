@@ -14,12 +14,24 @@ Status is one of: `open`, `reported`, `fixed-upstream`, `wontfix`.
 
 ## waybar: workspace buttons do not respond to clicks
 
-- **Status:** open
+- **Status:** fixed-upstream
 - **Project:** Alexays/Waybar
 - **Component:** waybar
 - **Retest at:** waybar 0.16.0
 - **Workaround in:** home/desktop.nix, home/tools.nix (`nyx-ws`)
-- **Upstream:**
+- **Upstream:** Alexays/Waybar#5294, fixed by Alexays/Waybar#5013
+
+Reported upstream by other people, and fixed. Alexays/Waybar#5294 describes
+this exact fault and closed as completed on 2026-09-02. The fix is
+Alexays/Waybar#5013, "fix(hyprland/workspaces): adapt dispatch commands for
+Lua IPC protocol", which merged on 2026-05-04.
+
+KEEP THE WORKAROUND. No release carries the fix yet: waybar 0.15.0 is the
+current release, and 0.15.0 came out on 2026-02-06, which is before the
+merge. The fix is in master, so 0.16.0 is the release to retest at.
+
+Do not file a new issue. Four earlier duplicates are closed already:
+Alexays/Waybar#5008, #5035, #5147 and #5198.
 
 Waybar's `hyprland/workspaces` module dispatches `on-click = "activate"`
 over Hyprland's IPC using the pre-Lua dispatch syntax. Hyprland 0.55+ parses
@@ -64,9 +76,18 @@ Better fix: point `eat-term-terminfo-directory` at the repo copy in
 - **Status:** open
 - **Project:** nix-community/home-manager
 - **Component:** home-manager
-- **Retest at:** home-manager 26.11
+- **Retest at:** home-manager 26.17
 - **Workaround in:** home/default.nix (`programs.zsh.initContent`)
 - **Upstream:**
+
+Retested on 2026-10-25 against home-manager 26.11. Still broken. The
+generated `.zshrc` still reads:
+
+```zsh
+if [[ -r "$GHOSTTY_RESOURCES_DIR"/shell-integration/zsh/ghostty-integration ]]; then
+```
+
+The guard tests the file, not the terminal. Keep the workaround.
 
 Ghostty exports `GHOSTTY_RESOURCES_DIR` into the session, so Emacs and
 everything it spawns inherits it. home-manager's generated `.zshrc` sources
@@ -99,6 +120,35 @@ application starts — despite `JAVA_HOME` already being set correctly.
 Workable by creating `/usr/lib/jvm` with a symlink via `systemd.tmpfiles`,
 but not worth carrying an FHS shim and an unfree licence for occasional use.
 Package removed. SpiderFoot is the open alternative.
+
+---
+
+## greeter and LUKS prompt ignore the Hyprland monitor configuration
+
+- **Status:** wontfix
+- **Project:** nyx
+- **Component:** greetd, regreet, plymouth
+- **Retest at:** never
+- **Workaround in:** none, see below
+- **Upstream:** n/a
+
+The internal panel backlight is dead hardware, so `home/desktop.nix` sets
+`hl.monitor({ output = "eDP-1", disabled = true })`.
+
+That setting reaches Hyprland only. Two prompts come before Hyprland, and
+each prompt picks an output for itself:
+
+1. The LUKS passphrase prompt, which plymouth draws from the initrd.
+2. The ReGreet login screen, which runs under cage.
+
+So each prompt can appear on the dead panel. Today cage picks the external
+display, and the login screen is visible. A boot with no external display
+shows no prompt at all, and you must type the passphrase and the password
+without feedback.
+
+No clean fix exists. cage takes an output argument, but the regreet module
+builds the greetd command itself. Plymouth in the initrd has no knowledge of
+the monitor layout. Keep the external display connected at boot.
 
 ---
 

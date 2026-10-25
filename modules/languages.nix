@@ -17,7 +17,7 @@
 
     # Nix
     nil                       # LSP
-    nixfmt-rfc-style          # formatter
+    nixfmt                    # formatter
     statix                    # linter
     deadnix                   # dead code
 

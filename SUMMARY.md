@@ -75,8 +75,16 @@ machine, so LUKS takes a passphrase at every boot — the right trade anyway.
 
 **Secrets:** two recipients in `.sops.yaml` — the host SSH key (so sops-nix
 can decrypt at activation) and my personal age key (so I can edit as
-myself). `users.mutableUsers = false`; the password comes from
-`/run/secrets-for-users/coops-password`, so `passwd` is a no-op.
+myself). `hashedPasswordFile` points at
+`/run/secrets-for-users/coops-password` for both `coops` and root, so the
+password comes from the encrypted file.
+
+`users.mutableUsers` is **still `true`** (`modules/secrets.nix`). The last
+step is deliberately not taken: with `false`, the encrypted file is the only
+way in, so a bad hash means a reinstall. `passwd` therefore still works and
+can drift from the encrypted source of truth. To finish it, follow the
+sequence in `modules/security.nix` — confirm a TTY login as both `coops` and
+root first, and keep a live USB to hand.
 
 **Network:** Quad9 over TLS with `Domains = "~."`, so no query ever reaches
 a DHCP-supplied resolver. Currently `opportunistic`/`allow-downgrade` —
@@ -163,6 +171,8 @@ backup, KeePassXC databases, and a README explaining what each unlocks.
 - [ ] Tighten DNS to strict once I am off hotel wifi.
 - [ ] Package melancholy properly: the `.tmTheme` upstream to bat, the
       palette somewhere it gets used by someone other than me.
-- [ ] File the Waybar workspace-click issue (see KNOWN-ISSUES.md).
+- [x] ~~File the Waybar workspace-click issue.~~ Already reported by other
+      people and already fixed upstream: Alexays/Waybar#5294, fixed by
+      Alexays/Waybar#5013. Keep `nyx-ws` until waybar 0.16.0 ships the fix.
 - [ ] External displays, dock, fingerprint reader.
 - [ ] A second host, once I am reunited with my belongings.

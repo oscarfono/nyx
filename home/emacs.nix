@@ -53,6 +53,27 @@ in
             || echo "nyx: straight.el seed failed, early-init will bootstrap it" >&2
         fi
 
+        # Compile the terminfo for eat.
+        #
+        # eat supplies terminfo source and expects the compiled terminfo in
+        # the build directory. straight.el makes symbolic links for the .el
+        # files only, so the directory that eat gives to TERMINFO does not
+        # exist. Then ncurses does not know eat-truecolor, and keystrokes
+        # duplicate on each redraw.
+        #
+        # straight.el builds eat when emacs starts, so the repository is
+        # absent on a first login. This service is a oneshot that runs at
+        # each login, so the next login does the work. The service also
+        # repairs the directory after `straight-rebuild-package eat`.
+        EAT_SRC="$HOME/.emacs.d/straight/repos/eat/eat.ti"
+        EAT_TI="$HOME/.emacs.d/straight/build/eat/terminfo"
+        if [ -f "$EAT_SRC" ] && [ ! -d "$EAT_TI" ]; then
+          ${pkgs.coreutils}/bin/mkdir -p "$EAT_TI"
+          ${pkgs.ncurses}/bin/tic -x -o "$EAT_TI" "$EAT_SRC" \
+            && echo "nyx: compiled eat terminfo into $EAT_TI" \
+            || echo "nyx: eat terminfo compile failed" >&2
+        fi
+
         exit 0
       '');
     };

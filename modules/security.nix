@@ -102,6 +102,14 @@
     wifi.macAddress = "random";
     ethernet.macAddress = "random";
     dns = "systemd-resolved";
+
+    # NetworkManager sets LLMNR for each connection, and NetworkManager
+    # gives that value to resolved as a per-link setting. A per-link setting
+    # beats the global setting, so the global `LLMNR = "no"` below is not
+    # enough on its own. 0 means no.
+    connectionConfig = {
+      "connection.llmnr" = 0;
+    };
   };
 
   # DNS.
@@ -129,6 +137,19 @@
       DNSSEC = "allow-downgrade";
       DNSOverTLS = "opportunistic";
       Cache = "yes";
+
+      # LLMNR is off. LLMNR asks every machine on the local link to resolve
+      # a name, and the protocol authenticates nothing. An attacker on the
+      # same network answers a query for any name, and the attacker then
+      # collects the credentials that follow. This attack is the standard
+      # first move on a hostile network, and a hotel network is hostile.
+      # Nothing on this machine needs LLMNR.
+      LLMNR = "no";
+
+      # MulticastDNS stays on, because mDNS finds printers and cast devices.
+      # mDNS also keeps to the reserved .local namespace, so mDNS cannot
+      # answer for a public name the way LLMNR can.
+      MulticastDNS = "yes";
     };
   };
 

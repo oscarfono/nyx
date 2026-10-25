@@ -106,6 +106,11 @@ in
   # systemd does not report an error for a `C` line that has no argument.
   # systemd drops the line. These rules had 5 fields until October 2026, so
   # the store path sat in the age field, and the library stayed empty.
+  #
+  # The mode field reads 0644, but the copied files are 0444. `C` keeps the
+  # mode of the source, and a file in the nix store is read-only. The files
+  # are wallpapers, so nothing writes to them. The directory is writable, so
+  # you can still delete a seeded wallpaper that you do not want.
   # Test a change to these rules with:
   #   systemd-tmpfiles --user --create --dry-run ~/.config/user-tmpfiles.d/home-manager.conf
   # Each `C` line must print a "Would copy tree" message.
