@@ -89,7 +89,9 @@ in
       "  Wallpaper next" = { exec = "nyx-wallpaper next"; };
       "  Wallpaper pick" = { exec = "nyx-wallpaper pick"; };
       "  Toggle bar"     = { exec = "pkill -SIGUSR1 waybar"; };
-      "󰍹  Toggle idle lock" = { exec = "systemctl --user is-active hypridle && systemctl --user stop hypridle || systemctl --user start hypridle"; };
+      # Holds the caelestia idle inhibitor, the same as the Caffeine entry
+      # under Tools. This entry stopped the hypridle unit before.
+      "󰍹  Toggle idle lock" = { exec = "nyx-caffeine"; };
     };
   };
 

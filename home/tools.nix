@@ -91,28 +91,39 @@ let
 
   # Idle inhibit. hypridle is a user service, so stopping it is the whole
   # mechanism: no daemon to talk to, nothing to get out of sync.
+  # Caffeine, through the caelestia idle inhibitor.
+  #
+  # This script stopped the hypridle UNIT before. That worked, but it left
+  # 2 problems. A script that died between the stop and the start left
+  # hypridle stopped, and nothing said so. And nyx-doctor reads the hypridle
+  # unit to report "idle timers active", so a stopped unit looked like a
+  # fault.
+  #
+  # caelestia holds a Wayland idle inhibitor instead, which is the same
+  # mechanism that a video player uses. Hyprland reports no idle while an
+  # inhibitor is held, so the hypridle timers never fire. hypridle keeps
+  # running, so the unit state stays honest.
   nyx-caffeine = pkgs.writeShellScriptBin "nyx-caffeine" ''
     set -eu
-    STATE="''${XDG_STATE_HOME:-$HOME/.local/state}/nyx"
-    mkdir -p "$STATE"
-    if systemctl --user is-active --quiet hypridle; then
-      systemctl --user stop hypridle
-      touch "$STATE/caffeine"
+    ${pkgs.caelestia-cli}/bin/caelestia shell idleInhibitor toggle
+    if [ "$(${pkgs.caelestia-cli}/bin/caelestia shell idleInhibitor isEnabled)" = "true" ]; then
       ${pkgs.libnotify}/bin/notify-send "Caffeine on" "Screen will not lock or sleep"
     else
-      systemctl --user start hypridle
-      rm -f "$STATE/caffeine"
       ${pkgs.libnotify}/bin/notify-send "Caffeine off" "Idle timers restored"
     fi
-    pkill -SIGRTMIN+9 waybar 2>/dev/null || true
   '';
 
   # Waybar reads this. Exit 0 with JSON either way.
+  # Reads the caelestia idle inhibitor, in the same way as nyx-caffeine.
+  #
+  # The output is waybar JSON. waybar is off now, so nothing reads this
+  # script. The script stays, because the script is the fallback for the
+  # waybar configuration that home/desktop.nix keeps.
   nyx-caffeine-status = pkgs.writeShellScriptBin "nyx-caffeine-status" ''
-    if systemctl --user is-active --quiet hypridle; then
-      printf '{"text":"","tooltip":"Idle timers active","class":"off"}\n'
-    else
+    if [ "$(${pkgs.caelestia-cli}/bin/caelestia shell idleInhibitor isEnabled 2>/dev/null)" = "true" ]; then
       printf '{"text":"","tooltip":"Caffeine: screen will not lock","class":"on"}\n'
+    else
+      printf '{"text":"","tooltip":"Idle timers active","class":"off"}\n'
     fi
   '';
 
