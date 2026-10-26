@@ -25,7 +25,10 @@ let
   # One script per menu level.
   mkMenu = id: label: items:
     let
-      entries = lib.concatStringsSep "\\n" (lib.attrNames items);
+      # Each label is one quoted printf argument, not part of the format.
+      # A label with an apostrophe (God's Eye View) or a % sign then stays
+      # a literal string.
+      entries = lib.escapeShellArgs (lib.attrNames items);
 
       cases = lib.concatStringsSep "\n      " (lib.mapAttrsToList (k: v:
         let target =
@@ -36,7 +39,7 @@ let
     in
     pkgs.writeShellScriptBin "nyx-menu-${id}" ''
       set -eu
-      choice=$(printf '${entries}\n' | ${picker} -p ${lib.escapeShellArg label})
+      choice=$(printf '%s\n' ${entries} | ${picker} -p ${lib.escapeShellArg label})
       [ -z "$choice" ] && exit 0
       case "$choice" in
       ${cases}

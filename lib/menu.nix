@@ -59,6 +59,7 @@ in
           "󰛳  Wireshark"    = { exec = "wireshark"; };
           "󰛳  nmap"         = { exec = "ghostty -e sh -c 'read -p \"target: \" t; nmap -A \"$t\" | less'"; };
           "󰒃  Vulnix scan"  = { exec = "ghostty -e sh -c 'vulnix --system | less'"; };
+          "󰇧  God's Eye View" = { exec = "gods-eye-view"; };
         };
       };
 

@@ -15,6 +15,7 @@
     ./treesitter.nix
     ./languages.nix
     ./dictation.nix
+    ./gods-eye-view.nix
     ./xdg.nix
     ./bat.nix
     ./webapps.nix
