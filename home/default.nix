@@ -23,6 +23,7 @@
     ./msf.nix
     ./proton.nix
     ./secops.nix
+    ./rea.nix
     ./report.nix
     ./local.nix
   ];

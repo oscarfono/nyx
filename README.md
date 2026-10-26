@@ -71,6 +71,7 @@ home/wallpaper.nix     swaybg unit and nyx-wallpaper
 home/emacs.nix         .emacs.d clone and straight.el seed
 home/dictation.nix     whisper.cpp, SUPER+D
 home/gods-eye-view.nix live 3D globe, runs the ~/Projects checkout
+home/rea.nix           REA reverse-engineering MCP, registered with Claude Code
 home/report.nix        nyx-report, for filing upstream issues
 home/local.nix         escape hatch for personal, unpublished shell functions
 hosts/t490/            hardware profile and host settings

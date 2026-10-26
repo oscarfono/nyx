@@ -98,6 +98,25 @@
     radare2
 
     # -----------------------------------------------------------------
+    # Reverse engineering
+    # -----------------------------------------------------------------
+    # The analysis engines for REA (home/rea.nix). Each one also works
+    # without REA. The rea wrapper gives REA the store paths of these
+    # engines, so REA does not find them through PATH.
+    #
+    # No WABT: REA accepts only WABT 1.0.42, and nixpkgs has 1.0.41.
+    # No pwndbg: nixpkgs has no package for pwndbg.
+    ghidra              # decompiler, the native-analysis provider for REA
+    jadx                # Android DEX to Java, with jadx-gui
+    apktool             # Android resources and manifest
+    rizin               # the radare2 fork that REA drives
+    gdb
+    unblob              # firmware extraction, beside binwalk
+    android-tools       # adb
+    mitmproxy           # mitmdump for live network captures
+    sigrok-cli          # recorded logic signals
+
+    # -----------------------------------------------------------------
     # Crypto and password work
     # -----------------------------------------------------------------
     hashcat
