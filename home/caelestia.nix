@@ -80,6 +80,19 @@ in
     cli = {
       enable = true;
       package = caelestia-cli-melancholy;
+
+      # The module writes these settings to ~/.config/caelestia/cli.json.
+      #
+      # home/desktop.nix themes fuzzel from the melancholy palette. By
+      # default, `caelestia scheme set` replaces fuzzel.ini with a plain
+      # file from its own template. The template also sets foot as the
+      # terminal. Then the next switch stops, because home-manager does not
+      # overwrite a file that it does not own:
+      #
+      #   Existing file '.../fuzzel/fuzzel.ini.hm-bak' would be clobbered
+      #
+      # Thus caelestia does not write fuzzel.ini.
+      settings.theme.enableFuzzel = false;
     };
 
     # A user service, so the shell starts with the session and stops with
