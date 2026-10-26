@@ -89,13 +89,22 @@ in
     Unit = {
       Description = "God's Eye View dev server on ${url}";
       ConditionPathExists = "${checkout}/package.json";
+      # Stop the restarts after 3 failures in 2 minutes. Without a limit, a
+      # start that always fails restarts every 5 seconds without end.
+      StartLimitIntervalSec = 120;
+      StartLimitBurst = 3;
     };
     Service = {
       WorkingDirectory = checkout;
       Environment = [
         # npm finds the node binary on PATH. Vite runs git for some build
         # metadata.
-        "PATH=${lib.makeBinPath [ node pkgs.git pkgs.coreutils ]}"
+        #
+        # `npm run` starts each script with `sh`, and npm finds `sh` on
+        # PATH. Without bash here, every start fails with:
+        #
+        #   npm error enoent spawn sh ENOENT
+        "PATH=${lib.makeBinPath [ node pkgs.bash pkgs.git pkgs.coreutils ]}"
         # Only the QA scripts use puppeteer. Its Chromium download is
         # 150MB, and that binary does not start on NixOS.
         "PUPPETEER_SKIP_DOWNLOAD=1"
