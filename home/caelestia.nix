@@ -1,5 +1,39 @@
 { config, pkgs, lib, inputs, ... }:
 
+let
+  t = import ../lib/melancholy.nix;
+
+  # lib/melancholy.nix, rendered into a caelestia scheme. See that file for
+  # the mapping from the 16 melancholy colours to the 110 caelestia keys.
+  melancholyText = (import ../lib/caelestia-scheme.nix { inherit lib; }).text;
+
+  melancholyFile = pkgs.writeText "melancholy-dark.txt" melancholyText;
+
+  # caelestia reads a scheme ONLY from <cli>/data/schemes, and caelestia
+  # reads no directory under $HOME. So the scheme goes into the package.
+  # `caelestia scheme set -n` then offers melancholy, because the choices
+  # for that flag come from a listing of that directory at run time.
+  #
+  # melancholy is a dark theme and melancholy has no light variant. The
+  # light file holds the dark colours, so a press of Light in the launcher
+  # changes nothing instead of failing.
+  caelestia-cli-melancholy = pkgs.caelestia-cli.overrideAttrs (old: {
+    postInstall = (old.postInstall or "") + ''
+      for d in $out/lib/python*/site-packages/caelestia/data/schemes; do
+        mkdir -p "$d/melancholy/default"
+        cp ${melancholyFile} "$d/melancholy/default/dark.txt"
+        cp ${melancholyFile} "$d/melancholy/default/light.txt"
+      done
+    '';
+  });
+
+  # The seeded copy in the library, and not the store path. The picker in
+  # nyx-wallpaper lists the library, so a wallpaper from the library stays
+  # consistent with `nyx-wallpaper current`. home/wallpaper.nix seeds the
+  # file, so the file is always present.
+  defaultWallpaper = "${config.home.homeDirectory}/Pictures/wallpapers/dark-abstract.png";
+in
+
 # Caelestia, a Quickshell desktop shell.
 #
 # Quickshell is a QtQuick toolkit for desktop components. One long-lived
@@ -45,7 +79,7 @@
     # launcher call that command.
     cli = {
       enable = true;
-      package = pkgs.caelestia-cli;
+      package = caelestia-cli-melancholy;
     };
 
     # A user service, so the shell starts with the session and stops with
@@ -159,6 +193,55 @@
       # The bar stays on screen. The alternative hides the bar until the
       # pointer reaches the edge of the screen.
       bar.persistent = true;
+
+      # The wallpaper library that nyx-wallpaper already seeds. The
+      # caelestia default is ~/Pictures/Wallpapers, with a capital W, and
+      # that directory does not exist here.
+      paths.wallpaperDir = "${config.home.homeDirectory}/Pictures/wallpapers";
     };
+  };
+
+  # Selects the scheme and the wallpaper.
+  #
+  # Neither one is a setting in shell.json. caelestia keeps the scheme in
+  # ~/.local/state/caelestia/scheme.json and the wallpaper in
+  # ~/.local/state/caelestia/wallpaper/path.txt, and the CLI writes both
+  # files. A read-only file from the nix store in either place would stop
+  # the CLI from working, so this service writes them instead.
+  #
+  # The service runs at each login and corrects the scheme if the scheme
+  # drifts. The service sets the wallpaper only when no wallpaper is set, so
+  # `nyx-wallpaper next` keeps its choice across a login.
+  systemd.user.services.nyx-caelestia-theme = {
+    Unit = {
+      Description = "Melancholy scheme and wallpaper for caelestia";
+      After = [ "caelestia.service" ];
+      PartOf = [ "graphical-session.target" ];
+    };
+    Service = {
+      Type = "oneshot";
+      RemainAfterExit = true;
+      ExecStart = toString (pkgs.writeShellScript "nyx-caelestia-theme" ''
+        set -u
+        CLI=${caelestia-cli-melancholy}/bin/caelestia
+        STATE="$HOME/.local/state/caelestia"
+
+        # -N keeps the mode fixed. Without -N the CLI reads the wallpaper
+        # and changes the mode, which is the smartScheme behaviour that
+        # shell.json turns off.
+        if [ ! -s "$STATE/wallpaper/path.txt" ]; then
+          $CLI wallpaper -f ${defaultWallpaper} -N \
+            || echo "nyx: could not set the caelestia wallpaper" >&2
+        fi
+
+        if ! ${pkgs.gnugrep}/bin/grep -q '"name": *"melancholy"' "$STATE/scheme.json" 2>/dev/null; then
+          $CLI scheme set -n melancholy -f default -m dark \
+            || echo "nyx: could not set the melancholy scheme" >&2
+        fi
+
+        exit 0
+      '');
+    };
+    Install.WantedBy = [ "graphical-session.target" ];
   };
 }

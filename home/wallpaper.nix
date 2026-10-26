@@ -49,9 +49,17 @@ let
         | sort
     }
 
+    # caelestia draws the wallpaper now, so this function hands the path to
+    # caelestia instead of restarting swaybg. -N keeps the colour scheme
+    # fixed: without -N the CLI reads the image and changes the light or
+    # dark mode, which is the smartScheme behaviour that
+    # home/caelestia.nix turns off.
+    #
+    # The state file stays, because nyx-wallpaper reads the file for `next`
+    # and for `current`.
     apply() {
       printf '%s\n' "$1" > "$CURRENT"
-      systemctl --user restart nyx-wallpaper.service
+      ${pkgs.caelestia-cli}/bin/caelestia wallpaper -f "$1" -N
     }
 
     case "''${1:-next}" in
@@ -118,6 +126,14 @@ in
     [ "d ${library} 0755 - - -" ]
     ++ map (w: "C ${library}/${builtins.baseNameOf w} 0644 - - - ${w}") seeded;
 
+  # The swaybg unit is OFF. caelestia draws the wallpaper now.
+  #
+  # Both drew a wallpaper for a while, and caelestia drew over swaybg,
+  # which is why the wallpaper looked wrong. caelestia is the only one now.
+  #
+  # The unit stays as the fallback, in the same way as the waybar and mako
+  # settings in home/desktop.nix. Set Install.WantedBy back, and set
+  # programs.caelestia.enable to false, and swaybg returns.
   systemd.user.services.nyx-wallpaper = {
     Unit = {
       Description = "Wallpaper (swaybg)";
@@ -132,6 +148,6 @@ in
       '');
       Restart = "on-failure";
     };
-    Install.WantedBy = [ "graphical-session.target" ];
+    # No Install.WantedBy, so nothing starts this unit. See the note above.
   };
 }
