@@ -7,6 +7,7 @@
     ./emacs.nix
     ./desktop.nix
     ./caelestia.nix
+    ./dock.nix
     ./menu.nix
     ./wallpaper.nix
     ./tools.nix

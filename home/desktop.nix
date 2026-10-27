@@ -161,6 +161,14 @@ in
       ${luaBind "SUPER + A" (exec "nyx-claude")}
       ${luaBind "SUPER + D" (exec "nyx-dictate")}
       ${luaBind "SUPER + Space" (exec "fuzzel")}
+
+      -- SUPER on its own toggles the caelestia launcher. The bind fires on
+      -- release, and only when no other key went down while SUPER was
+      -- held. Thus SUPER+B and the other SUPER binds do not open the
+      -- launcher. caelestia uses the same bind in its own hyprland.lua.
+      pcall(function()
+        hl.bind("SUPER + SUPER_L", hl.dsp.global("caelestia:launcher"), { release = true })
+      end)
       ${luaBind "SUPER + ALT + Space" (exec "nyx-menu-root")}
       ${luaBind "SUPER + K" (exec "ghostty -e less ${config.xdg.configHome}/nyx/keybinds.txt")}
       ${luaBind "SUPER + SHIFT + L" (exec "hyprlock")}
@@ -316,6 +324,7 @@ in
       SUPER C             calculator
       SUPER A             claude code (pick a project first)
       SUPER D             dictation toggle
+      SUPER               launcher (caelestia)
       SUPER Space         launcher (fuzzel)
       SUPER ALT Space     nyx menu
       SUPER K             this cheatsheet

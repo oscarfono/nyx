@@ -46,6 +46,7 @@ secrets/secrets.yaml   encrypted: user password, restic credentials
 lib/melancholy.nix     the palette. Single source of colour truth.
 lib/menu.nix           menu tree as data, rendered into scripts at build
 lib/webapps.nix        web apps as data, rendered into desktop entries
+lib/craft.nix          the ArtCraft apps as data, for the module and the dock
 assets/                wallpapers and the melancholy bat theme
 
 modules/desktop.nix    Hyprland, greetd/regreet, plymouth, audio, portals
@@ -69,6 +70,7 @@ home/theme.nix         GTK/Qt dark, WhiteSur icons, Bibata cursors
 home/tools.nix         nyx-shot, nyx-record, nyx-remind, nyx-doctor, nyx-ws
 home/menu.nix          renders lib/menu.nix into dispatch scripts
 home/wallpaper.nix     swaybg unit and nyx-wallpaper
+home/dock.nix          bottom-edge dock with a fixed set of apps
 home/emacs.nix         .emacs.d clone and straight.el seed
 home/dictation.nix     whisper.cpp, SUPER+D
 home/gods-eye-view.nix live 3D globe, runs the ~/Projects checkout
