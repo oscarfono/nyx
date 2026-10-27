@@ -13,6 +13,49 @@ let
   # Default/Extensions in the browser profile.
   claudeInChrome =
     "fcoeoabgfenejglbffodgkkbkcdhcgfn;https://clients2.google.com/service/update2/crx";
+
+  # tidal-hifi, an unofficial Electron client for the Tidal web player.
+  #
+  # This is the upstream AppImage, and not the nixpkgs package. nixpkgs
+  # has 8.1.3 on castlabs Electron 43.0.0. On this machine the renderer of
+  # that build stops with SIGTRAP. It cannot make shared memory in
+  # /dev/shm, and the window stays grey. 9.0.0 uses castlabs Electron
+  # 44.5.1 and shows the player.
+  #
+  # When nixpkgs gets 9.0.0 or later, delete this block and use
+  # pkgs.tidal-hifi.
+  #
+  # To update: set `version`, then set `hash` to the output of
+  # `nix hash file --sri --type sha256 tidal-hifi-<version>.AppImage`.
+  tidal-hifi =
+    let
+      pname = "tidal-hifi";
+      version = "9.0.0";
+      src = pkgs.fetchurl {
+        url = "https://github.com/Mastermindzh/tidal-hifi/releases/download/${version}/tidal-hifi-${version}.AppImage";
+        hash = "sha256-3E2/Lj52cOGHk27r9yFOG+xiGNC64MExp7Y3A299RZg=";
+      };
+      contents = pkgs.appimageTools.extract { inherit pname version src; };
+    in
+    pkgs.appimageTools.wrapType2 {
+      inherit pname version src;
+      # The desktop entry and the icon from the AppImage. The desktop entry
+      # sets StartupWMClass=tidal-hifi, and home/dock.nix pins that class.
+      extraInstallCommands = ''
+        install -Dm444 ${contents}/tidal-hifi.desktop -t $out/share/applications
+        substituteInPlace $out/share/applications/tidal-hifi.desktop \
+          --replace-fail 'Exec=AppRun' 'Exec=tidal-hifi'
+        cp -r ${contents}/usr/share/icons $out/share/
+      '';
+      meta = {
+        homepage = "https://github.com/Mastermindzh/tidal-hifi";
+        # tidal-hifi is MIT. The bundled castlabs Electron is not free.
+        license = with lib.licenses; [ mit unfreeRedistributable ];
+        platforms = [ "x86_64-linux" ];
+        sourceProvenance = [ lib.sourceTypes.binaryNativeCode ];
+        mainProgram = "tidal-hifi";
+      };
+    };
 in
 {
   # Unfree is opt-in per package. This list is the complete inventory of
@@ -32,10 +75,10 @@ in
       # non-free licences.
       "burpsuite"
 
-      # tidal-hifi runs on the castlabs build of Electron. That build
-      # carries Widevine, the DRM module that Tidal needs for HiFi and Max
-      # playback. tidal-hifi itself is MIT.
-      "castlabs-electron"
+      # tidal-hifi carries the castlabs build of Electron. That build has
+      # Widevine, the DRM module that Tidal needs for HiFi and Max
+      # playback. tidal-hifi itself is MIT. See the package above.
+      "tidal-hifi"
     ];
 
   environment.systemPackages = with pkgs; [
@@ -72,7 +115,8 @@ in
     scribus
 
     # Music. An unofficial Electron client for the Tidal web player, with
-    # HiFi playback and MPRIS media keys.
+    # HiFi playback and MPRIS media keys. This is the AppImage from the
+    # `let` above. A `let` binding takes precedence over `with pkgs`.
     tidal-hifi
 
     # Utilities
