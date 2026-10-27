@@ -123,7 +123,9 @@ in
   xdg.desktopEntries.gods-eye-view = {
     name = "God's Eye View";
     exec = "gods-eye-view";
-    icon = "brave-browser";
+    # A globe with an eye, in the melancholy colours. The app runs in a
+    # Brave window, but the Brave icon did not tell the two apart.
+    icon = "${../assets/icons/gods-eye-view.svg}";
     categories = [ "Network" "Education" ];
     terminal = false;
     settings.StartupWMClass = "brave-localhost__-Default";

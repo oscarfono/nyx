@@ -47,7 +47,7 @@ lib/melancholy.nix     the palette. Single source of colour truth.
 lib/menu.nix           menu tree as data, rendered into scripts at build
 lib/webapps.nix        web apps as data, rendered into desktop entries
 lib/craft.nix          the ArtCraft apps as data, for the module and the dock
-assets/                wallpapers and the melancholy bat theme
+assets/                wallpapers, icons and the melancholy bat theme
 
 modules/desktop.nix    Hyprland, greetd/regreet, plymouth, audio, portals
 modules/apps.nix       Brave, Firefox, KeePassXC, Claude Code, unfree list

@@ -53,7 +53,7 @@ let
   args = lib.escapeShellArgs [
     "-d"                 # hide until the pointer touches the edge
     "-p" "bottom"
-    "-i" "44"            # icon size in pixels
+    "-i" "60"            # icon size on hover. See the style below.
     "-mb" "6"            # gap between the dock and the edge
     "-nolauncher"        # SUPER opens the launcher, so no launcher button
     "-g" (lib.concatStringsSep " " ignoredClasses)
@@ -79,6 +79,22 @@ in
       background: none;
       border-style: none;
       box-shadow: none;
+    }
+
+    /* The hover zoom. The dock makes each icon at 60 px, and shows the
+       icon at 0.75 of that size, which is 45 px. The icon gets its full
+       size on hover. Thus the zoomed icon stays sharp, and it fits in the
+       space that the dock already keeps for the icon.
+
+       GTK3 has no CSS transform. -gtk-icon-transform is the GTK3
+       property that scales an icon. */
+    image {
+      -gtk-icon-transform: scale(0.75);
+      transition: -gtk-icon-transform 140ms ease-out;
+    }
+
+    button:hover image {
+      -gtk-icon-transform: scale(1);
     }
 
     button {

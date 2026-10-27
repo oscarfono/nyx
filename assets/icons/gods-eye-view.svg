@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <!-- God's Eye View: a globe with an eye. Colours from lib/melancholy.nix. -->
+  <defs>
+    <radialGradient id="sea" cx="40%" cy="35%" r="70%">
+      <stop offset="0" stop-color="#4FCBFF"/>
+      <stop offset="0.55" stop-color="#0091CC"/>
+      <stop offset="1" stop-color="#0B2A3D"/>
+    </radialGradient>
+    <clipPath id="ball"><circle cx="64" cy="64" r="50"/></clipPath>
+  </defs>
+  <rect x="4" y="4" width="120" height="120" rx="28" fill="#2A2A2A"/>
+  <circle cx="64" cy="64" r="50" fill="url(#sea)"/>
+  <g clip-path="url(#ball)" fill="none" stroke="#DEDEDE" stroke-opacity="0.35" stroke-width="1.6">
+    <ellipse cx="64" cy="64" rx="20" ry="50"/>
+    <ellipse cx="64" cy="64" rx="38" ry="50"/>
+    <line x1="64" y1="14" x2="64" y2="114"/>
+    <line x1="14" y1="64" x2="114" y2="64"/>
+    <path d="M18 42 Q64 52 110 42"/>
+    <path d="M18 86 Q64 76 110 86"/>
+  </g>
+  <path d="M30 64 Q64 34 98 64 Q64 94 30 64 Z" fill="#2A2A2A" fill-opacity="0.85" stroke="#FFB728" stroke-width="3"/>
+  <circle cx="64" cy="64" r="13" fill="#FFB728"/>
+  <circle cx="64" cy="64" r="6" fill="#2A2A2A"/>
+  <circle cx="68" cy="60" r="2.5" fill="#FCDEEA"/>
+</svg>
