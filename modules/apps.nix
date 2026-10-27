@@ -31,6 +31,11 @@ in
       # nixpkgs ships the community/free editions but they are still
       # non-free licences.
       "burpsuite"
+
+      # tidal-hifi runs on the castlabs build of Electron. That build
+      # carries Widevine, the DRM module that Tidal needs for HiFi and Max
+      # playback. tidal-hifi itself is MIT.
+      "castlabs-electron"
     ];
 
   environment.systemPackages = with pkgs; [
@@ -65,6 +70,10 @@ in
     inkscape
     gimp
     scribus
+
+    # Music. An unofficial Electron client for the Tidal web player, with
+    # HiFi playback and MPRIS media keys.
+    tidal-hifi
 
     # Utilities
     qalculate-gtk

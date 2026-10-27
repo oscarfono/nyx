@@ -20,35 +20,48 @@
 let
   t = import ../lib/melancholy.nix;
   craft = import ../lib/craft.nix;
+  webapps = import ../lib/webapps.nix;
 
+  # The web apps from lib/webapps.nix that go on the dock.
+  pinnedWebapps = [ "proton-calendar" "proton-drive" ];
+
+  # The dock shows the pins in this order.
   pins =
-    map (name: "ai.storyteller.${name}") (builtins.attrNames craft)
-    ++ [
-      "gods-eye-view"
+    [
+      "brave-browser"
+      "chromium-browser"
       "emacsclient"
-    ];
+      "proton-mail"
+    ]
+    ++ map (key: "nyx-webapp-${key}") pinnedWebapps
+    ++ [
+      "proton-pass"
+      "tidal-hifi"
+    ]
+    ++ map (name: "ai.storyteller.${name}") (builtins.attrNames craft)
+    ++ [ "gods-eye-view" ];
 
   # The dock also shows each window that has no pin. These classes stay off
   # the dock: the terminal, and the programs that have a key on SUPER.
   #
-  # Two of the classes belong to pinned programs, and the class is not
-  # equal to the pin. Without these entries, each program gets a second
-  # icon on the dock while it runs:
+  # Some classes belong to pinned programs, and the class is not equal to
+  # the pin. Without these entries, each program gets a second icon on the
+  # dock while it runs:
   #   emacs                      emacsclient opens a frame of the daemon
   #   brave-localhost__-Default  gods-eye-view opens a Brave app window
+  #   brave-<class>-Default      each pinned web app, from lib/webapps.nix
   #
   # A program that is not in this list shows on the dock while it runs.
   ignoredClasses = [
     "com.mitchellh.ghostty"
-    "brave-browser"
     "firefox"
-    "chromium-browser"
     "org.keepassxc.KeePassXC"
     "org.gnome.Nautilus"
     "qalculate-gtk"
     "emacs"
     "brave-localhost__-Default"
-  ];
+  ]
+  ++ map (key: "brave-${webapps.${key}.class}-Default") pinnedWebapps;
 
   args = lib.escapeShellArgs [
     "-d"                 # hide until the pointer touches the edge

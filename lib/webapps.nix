@@ -32,6 +32,25 @@
     categories = [ "Network" "Email" ];
   };
 
+  # Proton has no Linux app for Drive. The Calendar is inside the Proton
+  # Mail app, but the Calendar has no launcher of its own. The icons are
+  # the favicons of the two web apps.
+  proton-drive = {
+    name = "Proton Drive";
+    url = "https://drive.proton.me";
+    class = "drive.proton.me__";
+    icon = "${../assets/icons/proton-drive.svg}";
+    categories = [ "Network" "FileTransfer" ];
+  };
+
+  proton-calendar = {
+    name = "Proton Calendar";
+    url = "https://calendar.proton.me";
+    class = "calendar.proton.me__";
+    icon = "${../assets/icons/proton-calendar.svg}";
+    categories = [ "Office" "Calendar" ];
+  };
+
   github = {
     name = "GitHub";
     url = "https://github.com";
