@@ -207,6 +207,11 @@ in
       # pointer reaches the edge of the screen.
       bar.persistent = true;
 
+      # The launcher opens when the pointer touches the bottom edge, at
+      # the centre of the screen. Thus no click on the bar is necessary.
+      # SUPER+Space still opens fuzzel.
+      launcher.showOnHover = true;
+
       # The wallpaper library that nyx-wallpaper already seeds. The
       # caelestia default is ~/Pictures/Wallpapers, with a capital W, and
       # that directory does not exist here.
