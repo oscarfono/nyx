@@ -117,6 +117,7 @@
       # different list.
       desktopModules = [
         ./modules/apps.nix
+        ./modules/craft.nix
         ./modules/desktop.nix
         ./modules/devops.nix
         ./modules/emacs.nix

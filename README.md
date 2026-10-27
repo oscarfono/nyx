@@ -50,6 +50,7 @@ assets/                wallpapers and the melancholy bat theme
 
 modules/desktop.nix    Hyprland, greetd/regreet, plymouth, audio, portals
 modules/apps.nix       Brave, Firefox, KeePassXC, Claude Code, unfree list
+modules/craft.nix      ArtCraft's Rust stand-ins for the Adobe suite
 modules/emacs.nix      Emacs binary and the toolchain straight.el needs
 modules/languages.nix  LSP servers, formatters, linters
 modules/devops.nix     containers, k8s, IaC, nix settings, nh
