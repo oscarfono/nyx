@@ -1,4 +1,4 @@
-{ inputs, ... }:
+{ pkgs, inputs, ... }:
 
 # Hermes Agent, from Nous Research. https://github.com/NousResearch/hermes-agent
 #
@@ -46,5 +46,11 @@
   services.hermes-agent = {
     enable = true;
     gateway.enable = true;
+
+    # `hermes setup` selected the docker terminal backend. The unit PATH
+    # has only Hermes, bash, coreutils and git, so the gateway did not
+    # find docker. The account is in the docker group, so the CLI is
+    # sufficient.
+    extraPackages = [ pkgs.docker ];
   };
 }
