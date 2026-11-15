@@ -1,4 +1,4 @@
-{ pkgs, inputs, ... }:
+{ config, pkgs, inputs, ... }:
 
 # Hermes Agent, from Nous Research. https://github.com/NousResearch/hermes-agent
 #
@@ -52,6 +52,19 @@
     # find docker. The account is in the docker group, so the CLI is
     # sufficient.
     extraPackages = [ pkgs.docker ];
+
+    # `hermes setup` set proxy.enabled to true, but the iron-proxy egress
+    # proxy was never configured. With enforce_on_docker (the default), the
+    # docker backend then refuses to start a sandbox, and each terminal and
+    # file tool fails. false is the default of Hermes, and starts nothing.
+    settings.proxy.enabled = false;
+
+    # The docker sandbox sees only this directory of the host. All polaris1
+    # projects go in ~/Projects/polaris1. The other directories in
+    # ~/Projects, and their .env files, stay out of the sandbox.
+    settings.terminal.docker_volumes = [
+      "${config.home.homeDirectory}/Projects/polaris1:/workspace/polaris1"
+    ];
 
     # The hosted MCP server of Cloudflare. It uses OAuth, so no key goes
     # into the Nix store or into .env. Hermes keeps the token in
