@@ -26,6 +26,7 @@
     ./secops.nix
     ./rea.nix
     ./ant.nix
+    ./hermes.nix
     ./report.nix
     ./local.nix
   ];

@@ -55,6 +55,17 @@
       url = "github:caelestia-dots/shell";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+
+    # Hermes Agent, from Nous Research. This input supplies the
+    # home-manager module and the package. See home/hermes.nix.
+    #
+    # The tag pins a stable release. The main branch gets a canary every
+    # day.
+    #
+    # CAUTION: do not add `inputs.nixpkgs.follows`. The upstream docs do
+    # not use it, and uv2nix builds the Python set against the nixpkgs of
+    # the upstream lock.
+    hermes-agent.url = "github:NousResearch/hermes-agent/v0.23.1";
   };
 
   outputs = { self, nixpkgs, home-manager, nixos-hardware, sops-nix, lanzaboote, nix-index-database, ... }@inputs:
