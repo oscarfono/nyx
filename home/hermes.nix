@@ -53,23 +53,16 @@
     # sufficient.
     extraPackages = [ pkgs.docker ];
 
-    # The hosted MCP servers of each vendor. Both use OAuth, so no key
-    # goes into the Nix store or into .env. Hermes keeps the tokens in
+    # The hosted MCP server of Cloudflare. It uses OAuth, so no key goes
+    # into the Nix store or into .env. Hermes keeps the token in
     # ~/.hermes/mcp-tokens/, and restic backs up that directory.
     #
-    # After a rebuild, log in to each server one time:
+    # After a rebuild, log in one time:
     #   hermes mcp login cloudflare
-    #   hermes mcp login stripe
     mcpServers = {
       # The full Cloudflare API in Code Mode, and the developer docs.
       cloudflare = {
         url = "https://mcp.cloudflare.com/mcp";
-        auth = "oauth";
-      };
-
-      # The login lets you select the accounts and the sandboxes.
-      stripe = {
-        url = "https://mcp.stripe.com";
         auth = "oauth";
       };
     };
