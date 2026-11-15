@@ -119,6 +119,9 @@ in
     # `let` above. A `let` binding takes precedence over `with pkgs`.
     tidal-hifi
 
+    # Messaging. The official Telegram desktop client.
+    telegram-desktop
+
     # Utilities
     qalculate-gtk
     tree
