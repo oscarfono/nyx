@@ -25,6 +25,7 @@
     ./proton.nix
     ./secops.nix
     ./rea.nix
+    ./ant.nix
     ./report.nix
     ./local.nix
   ];
