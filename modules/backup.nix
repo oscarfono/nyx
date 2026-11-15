@@ -52,6 +52,11 @@ in
       # Personal shell functions. Not in the nyx repo by design (see
       # home/local.nix), so restic is the only thing that has them.
       "/home/${username}/.config/zsh/local"
+
+      # Hermes Agent: the memories, the sessions, the skills, config.yaml,
+      # .env and auth.json. Only the Hermes CLI writes these files, so
+      # restic is the only copy of them.
+      "/home/${username}/.hermes"
     ];
 
     exclude = [
@@ -62,6 +67,15 @@ in
       "**/.direnv"
       "/home/${username}/.emacs.d/straight/build"
       "/home/${username}/.emacs.d/eln-cache"
+
+      # Hermes makes these again when it starts.
+      "/home/${username}/.hermes/cache"
+      "/home/${username}/.hermes/audio_cache"
+      "/home/${username}/.hermes/image_cache"
+      "/home/${username}/.hermes/models_dev_cache.json"
+      "/home/${username}/.hermes/runtime"
+      "/home/${username}/.hermes/sandboxes"
+      "/home/${username}/.hermes/*.db-shm"
     ];
 
     timerConfig = {

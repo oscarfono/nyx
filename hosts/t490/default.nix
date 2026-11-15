@@ -84,6 +84,11 @@
     description = username;
     extraGroups = [ "wheel" "networkmanager" "video" "audio" "docker" "wireshark" ];
     shell = pkgs.zsh;
+
+    # Linger keeps the systemd user manager alive after logout. Without
+    # linger, the Hermes gateway (a user service, see home/hermes.nix)
+    # stops when the last session ends.
+    linger = true;
   };
   programs.zsh.enable = lib.mkDefault true;
 

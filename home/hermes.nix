@@ -33,10 +33,18 @@
   };
 
   # Stage 2. The gateway is a systemd user service that keeps Hermes running
-  # for the messaging platforms.
+  # for the messaging platforms. hosts/t490/default.nix sets linger, so the
+  # service continues after logout.
   #
-  # services.hermes-agent = {
-  #   enable = true;
-  #   gateway.enable = true;
-  # };
+  # `settings` is empty on purpose. `hermes setup` wrote the provider and
+  # the model to config.yaml in stage 1, and the merge keeps those values.
+  # `environmentFiles` is empty, so the module does not write .env again.
+  # The Telegram token in .env stays.
+  #
+  # CAUTION: managed mode now blocks `hermes setup` and `hermes config set`.
+  # To change the model or the provider, set `settings` here and rebuild.
+  services.hermes-agent = {
+    enable = true;
+    gateway.enable = true;
+  };
 }
