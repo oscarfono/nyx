@@ -55,6 +55,20 @@ in
         -- hl.monitor({ output = "eDP-1", mode = "1920x1080@60", position = "0x0", scale = 1.5 })
       end)
 
+      -- Without a rule, Hyprland uses the preferred mode of the display.
+      -- A 4K TV can prefer 4096x2160@24. At 24 Hz the pointer is slow and
+      -- it jumps, and the pointer must move across too many pixels.
+      --
+      -- Do not use highrr here. highrr compares the refresh rate first, and
+      -- this TV reports 800x600@60.317. That is faster than 60, so highrr
+      -- selected 800x600.
+      --
+      -- 2560x1440@60 is the largest mode at 60 Hz on this TV. If a display
+      -- does not have that mode, Hyprland uses the preferred mode.
+      pcall(function()
+        hl.monitor({ output = "HDMI-A-2", mode = "2560x1440@60", position = "0x0", scale = 1 })
+      end)
+
       hl.config({
         general = {
           gaps_in = 4,
@@ -75,6 +89,12 @@ in
         input = {
           kb_layout = "us",
           follow_mouse = 1,
+
+          -- sensitivity is from -1.0 to 1.0. The default is 0. A higher
+          -- value moves the pointer farther for the same finger movement.
+          -- The pointer was slow across a 2560x1440 TV at 0.
+          sensitivity = 0.3,
+
           touchpad = {
             natural_scroll = true,
 
