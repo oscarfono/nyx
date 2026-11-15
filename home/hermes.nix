@@ -53,25 +53,17 @@
     # sufficient.
     extraPackages = [ pkgs.docker ];
 
-    # The hosted MCP servers of each vendor. All three use OAuth, so no key
+    # The hosted MCP servers of each vendor. Both use OAuth, so no key
     # goes into the Nix store or into .env. Hermes keeps the tokens in
     # ~/.hermes/mcp-tokens/, and restic backs up that directory.
     #
     # After a rebuild, log in to each server one time:
     #   hermes mcp login cloudflare
-    #   hermes mcp login grafana
     #   hermes mcp login stripe
     mcpServers = {
       # The full Cloudflare API in Code Mode, and the developer docs.
       cloudflare = {
         url = "https://mcp.cloudflare.com/mcp";
-        auth = "oauth";
-      };
-
-      # Grafana Cloud. The login asks for the stack. For a self-hosted
-      # Grafana, use the OSS server (github.com/grafana/mcp-grafana) instead.
-      grafana = {
-        url = "https://mcp.grafana.com/mcp";
         auth = "oauth";
       };
 
