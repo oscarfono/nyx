@@ -63,10 +63,13 @@
     # the vault that orchestrates the other projects, so the agents must
     # read and write each project from the vault.
     #
+    # cwd is a path in the container, not on the host. With a host path,
+    # the sandbox starts in /root.
+    #
     # CAUTION: each project in ~/Projects, and each .env file in it, is
     # visible to the agents. Do not keep a plain-text secret in
     # ~/Projects. Keep each file in nyx/secrets encrypted with sops.
-    settings.terminal.cwd = "${config.home.homeDirectory}/Projects";
+    settings.terminal.cwd = "/workspace";
     settings.terminal.docker_volumes = [
       "${config.home.homeDirectory}/Projects:/workspace"
     ];
