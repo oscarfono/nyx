@@ -92,6 +92,14 @@
   };
   programs.zsh.enable = lib.mkDefault true;
 
+  # The Hermes docker sandbox mounts ~/Projects at /workspace (see
+  # home/hermes.nix). This link gives the host the same path, so that
+  # terminal.cwd and the paths that the agents write are correct on the
+  # host and in the container. "L" does not replace an existing path.
+  systemd.tmpfiles.rules = [
+    "L /workspace - - - - /home/${username}/Projects"
+  ];
+
   # ---------------------------------------------------------------------
   # VM variant
   # ---------------------------------------------------------------------
