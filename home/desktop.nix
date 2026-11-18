@@ -92,8 +92,13 @@ in
 
           -- sensitivity is from -1.0 to 1.0. The default is 0. A higher
           -- value moves the pointer farther for the same finger movement.
-          -- The pointer was slow across a 2560x1440 TV at 0.
-          sensitivity = 0.3,
+          -- The pointer was slow across a 2560x1440 TV at 0, and also
+          -- at 0.3.
+          --
+          -- To try a value before you change it here, run:
+          --   hyprctl eval 'hl.config({ input = { sensitivity = 0.8 } })'
+          -- Hyprland keeps that value only until it stops.
+          sensitivity = 0.6,
 
           touchpad = {
             natural_scroll = true,
