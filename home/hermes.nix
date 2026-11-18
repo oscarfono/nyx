@@ -59,11 +59,16 @@
     # file tool fails. false is the default of Hermes, and starts nothing.
     settings.proxy.enabled = false;
 
-    # The docker sandbox sees only this directory of the host. All polaris1
-    # projects go in ~/Projects/polaris1. The other directories in
-    # ~/Projects, and their .env files, stay out of the sandbox.
+    # The docker sandbox sees all of ~/Projects at /workspace. liber8 is
+    # the vault that orchestrates the other projects, so the agents must
+    # read and write each project from the vault.
+    #
+    # CAUTION: each project in ~/Projects, and each .env file in it, is
+    # visible to the agents. Do not keep a plain-text secret in
+    # ~/Projects. Keep each file in nyx/secrets encrypted with sops.
+    settings.terminal.cwd = "${config.home.homeDirectory}/Projects";
     settings.terminal.docker_volumes = [
-      "${config.home.homeDirectory}/Projects/polaris1:/workspace/polaris1"
+      "${config.home.homeDirectory}/Projects:/workspace"
     ];
 
     # The hosted MCP server of Cloudflare. It uses OAuth, so no key goes
