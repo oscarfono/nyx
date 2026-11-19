@@ -27,6 +27,7 @@
     ./rea.nix
     ./ant.nix
     ./hermes.nix
+    ./liber8-floor.nix
     ./report.nix
     ./local.nix
   ];

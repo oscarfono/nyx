@@ -24,6 +24,49 @@
 # CAUTION: ~/.hermes holds API keys and OAuth tokens. restic does not back up
 # ~/.hermes. See modules/backup.nix.
 
+let
+  projects = "${config.home.homeDirectory}/Projects";
+
+  # The projects that the docker sandbox mounts. Each one appears at the
+  # same path under /workspace.
+  #
+  # nyx is here so the agents can read the module that governs them. The
+  # file that decides what the sandbox may reach was, until 19 November
+  # 2026, the one project the sandbox could not open — which is how an
+  # evening went into working out Hermes's own messaging configuration from
+  # documentation while the answer sat one directory away.
+  #
+  # liber8-floor is the Liber8 floor application's repository (see
+  # home/liber8-floor.nix). Neither project holds a plain-text secret: no
+  # .env, no key file, nothing that maskedSecrets below would need to
+  # cover. That check is required by the caution directly below, and it was
+  # made before these two were added.
+  mountedProjects = [
+    "liber8"
+    "liber8-floor"
+    "nyx"
+    "polaris1"
+    "adp"
+    "adp-tuned"
+    "adp-flash"
+    "bgb"
+  ];
+
+  # The plain-text secrets in the mounted projects. In the container, an
+  # empty read-only file covers each one. The file on the host does not
+  # change.
+  #
+  # CAUTION: a secret file that is not in this list is visible to the
+  # agents. Before you add a project above, find its secret files, and
+  # add each one here.
+  maskedSecrets = [
+    "adp/.env"
+    "polaris1/app/deploy/.env"
+    "polaris1/station/deploy/.env"
+  ];
+
+  emptyFile = pkgs.writeText "hermes-masked-secret" "";
+in
 {
   imports = [ inputs.hermes-agent.homeManagerModules.default ];
 
@@ -59,20 +102,47 @@
     # file tool fails. false is the default of Hermes, and starts nothing.
     settings.proxy.enabled = false;
 
-    # The docker sandbox sees only the liber8 vault, at /workspace/liber8.
-    # The other projects in ~/Projects, and their .env files, stay out of
-    # the sandbox. When all of ~/Projects was mounted, the agents read the
-    # deploy .env files of polaris1.
+    # The docker sandbox sees only the projects in mountedProjects, at
+    # /workspace/<name>. The other projects in ~/Projects stay out of the
+    # sandbox. When all of ~/Projects was mounted, the agents read the
+    # deploy .env files of polaris1. maskedSecrets covers those files now.
     #
     # cwd is a path in the container. hosts/t490/default.nix links
     # /workspace on the host to ~/Projects, so the same path is correct
     # on the host.
-    #
-    # CAUTION: do not mount a directory that holds a plain-text secret.
     settings.terminal.cwd = "/workspace/liber8";
-    settings.terminal.docker_volumes = [
-      "${config.home.homeDirectory}/Projects/liber8:/workspace/liber8"
-    ];
+    settings.terminal.docker_volumes =
+      map (name: "${projects}/${name}:/workspace/${name}") mountedProjects
+      ++ map (path: "${emptyFile}:/workspace/${path}:ro") maskedSecrets
+      ++ [ "${config.home.homeDirectory}/.hermes/github:/opt/github:ro" ];
+
+    # Hermes has its own GitHub credential: a fine-grained token for
+    # oscarfono/liber8 only, with Contents read and write. The token is in
+    # ~/.hermes/github/token, which is outside the Nix store and outside
+    # the vault. The container reads it through the read-only mount above.
+    #
+    # The container has git but no ssh, so git@github.com: becomes HTTPS.
+    # The helper only answers "get". It never writes the token.
+    #
+    # The agents commit as their own identity, without a signature. The
+    # GIT_CONFIG_* values override the signing key in .git/config of the
+    # vault. A commit by the Director stays signed.
+    #
+    # CAUTION: an agent can read the token. Keep its scope to this one
+    # repository. Give it an expiry date.
+    settings.terminal.docker_env = {
+      GIT_CONFIG_COUNT = "5";
+      GIT_CONFIG_KEY_0 = "credential.https://github.com.helper";
+      GIT_CONFIG_VALUE_0 = "!f() { test \"$1\" = get && echo username=x-access-token && echo password=$(cat /opt/github/token); }; f";
+      GIT_CONFIG_KEY_1 = "url.https://github.com/.insteadOf";
+      GIT_CONFIG_VALUE_1 = "git@github.com:";
+      GIT_CONFIG_KEY_2 = "commit.gpgsign";
+      GIT_CONFIG_VALUE_2 = "false";
+      GIT_CONFIG_KEY_3 = "user.name";
+      GIT_CONFIG_VALUE_3 = "Hermes (liber8)";
+      GIT_CONFIG_KEY_4 = "user.email";
+      GIT_CONFIG_VALUE_4 = "hermes@liber8.invalid";
+    };
 
     # The hosted MCP server of Cloudflare. It uses OAuth, so no key goes
     # into the Nix store or into .env. Hermes keeps the token in
