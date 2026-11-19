@@ -114,7 +114,31 @@ in
     settings.terminal.docker_volumes =
       map (name: "${projects}/${name}:/workspace/${name}") mountedProjects
       ++ map (path: "${emptyFile}:/workspace/${path}:ro") maskedSecrets
-      ++ [ "${config.home.homeDirectory}/.hermes/github:/opt/github:ro" ];
+      ++ [
+        "${config.home.homeDirectory}/.hermes/github:/opt/github:ro"
+
+        # The Vultr API key, read-only, for the same reason the GitHub token is
+        # here: the agent cannot fix infrastructure it cannot reach, and on
+        # 19 November 2026 an evening went into a stuck instance that one API
+        # call would have cleared. The file is ~/.hermes/vultr/token, outside
+        # the Nix store and outside every repository, and it is populated by
+        # the Director from the existing key — never typed into a chat, because
+        # the transcript is permanent.
+        #
+        # CAUTION: BIGGER BLAST RADIUS THAN THE GITHUB TOKEN, and it is worth
+        # stating in the file rather than in a memory. The GitHub token is
+        # scoped to one repository. A Vultr key is ACCOUNT-WIDE and can destroy
+        # every instance on it — including polaris1's, if there are any. Vultr
+        # does not, as far as this desk verified on 19 November 2026, offer
+        # scoped or read-only keys.
+        #
+        # So this mount is all-or-nothing, and three things follow: the key is
+        # rotated if the sandbox is ever suspected (policy 09 rule 11); no
+        # seat spends on this account without the Director's word; and the
+        # script that uses it (liber8/scripts/vultr-triage.sh) confirms a
+        # destroy by asking for the instance id to be typed back.
+        "${config.home.homeDirectory}/.hermes/vultr:/opt/vultr:ro"
+      ];
 
     # Hermes has its own GitHub credential: a fine-grained token for
     # oscarfono/liber8 only, with Contents read and write. The token is in
