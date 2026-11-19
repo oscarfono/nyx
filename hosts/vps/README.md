@@ -135,23 +135,42 @@ Then, and only then, the machine is ready for what it is for.
 
 ---
 
-## What is deliberately NOT here yet
+## The hub — what it is, and the two things it needs that are not code
 
-**The Matrix hub.** Synapse, `mautrix-telegram`, nginx, ACME, and the exposure
-rules from policy 09. It is not in this directory because two of its inputs do
-not exist yet:
+`modules/matrix.nix` now holds the Matrix hub: Synapse with federation and
+registration both off, the Telegram bridge with it, nginx in front, ACME for
+certificates, and the discovery file at the root domain. Also unbuilt, and the
+same command settles it.
 
-1. **The domain for `server_name`.** The whole point of setting it on a domain we
-   control is that the machine can then move without changing an MXID — so it has
-   to be chosen before the hub is built, not after.
-2. **A box that answers.** Writing a homeserver's configuration before the
-   machine exists means writing it against a guess about ports, certificates and
-   the reverse proxy that will be wrong in ways that are invisible until a client
-   cannot connect.
+**Two decisions are baked into it, and one of them is permanent:**
 
-The module is next, and it is short, because nixpkgs packages the whole of it:
-`services.matrix-synapse`, `services.mautrix-telegram` (which registers its own
-appservice with Synapse by default), `security.acme`, `services.nginx`.
+1. **`server_name` is `designandweb.ltd`.** It appears at the end of every user
+   ID and room address (`@coop:designandweb.ltd`) and it is the one value here
+   that cannot be changed later — changing it makes every address anyone has
+   written down a stranger. The homeserver itself lives at
+   `matrix.designandweb.ltd`, joined to the address by a small file served from
+   the root domain. **Consequence: the machine is movable.** Rebuild it in
+   another country, repoint the DNS, and no MXID changes.
+2. **Federation and registration are off**, by not serving them rather than by a
+   policy the software is asked to enforce.
+
+**What it needs from you that is not code:**
+
+- **Two DNS records**, both pointing at the box:
+  - `matrix.designandweb.ltd` — A record. The homeserver.
+  - `designandweb.ltd` — A record. It serves the discovery file today and the
+    company site later, so it must reach this machine until that site exists.
+- **One open question, and it is a secret, not a preference:** the bot account
+  has to be created, registration is off, and the documented tool needs a
+  `registration_shared_secret` — which must NOT go in the Nix store. The module
+  names three ways to resolve it and the first thing to check:
+  `nixos-option services.matrix-synapse | grep -i secret`.
+
+**And the thing that must not be forgotten once it runs:** `/var/lib/matrix-synapse`
+holds the server's **signing key**. Lose it and every client sees a different
+server at the same address. Policy 09 rule 5 requires it backed up off this
+machine, and `modules/backup.nix` is written for the laptop's paths — it does
+not cover this box yet. That is the change after this one.
 
 ## The one thing that must not be assumed later
 

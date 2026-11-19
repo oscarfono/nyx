@@ -161,6 +161,7 @@
       serverModules = [
         ./modules/secrets.nix
         ./modules/security.nix
+        ./modules/matrix.nix
       ];
 
       # The user layer for a headless box. home/default.nix is the desktop:
