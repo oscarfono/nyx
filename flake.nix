@@ -66,7 +66,22 @@
     # not use it, and uv2nix builds the Python set against the nixpkgs of
     # the upstream lock.
     hermes-agent.url = "github:NousResearch/hermes-agent/v0.23.1";
-  };
+
+    # Declarative disk layout, and the tool nixos-anywhere partitions with.
+    #
+    # A VPS has no hardware to probe, so that host has no
+    # hardware-configuration.nix: hosts/vps/disko.nix IS that file. This is
+    # what makes the encryption part of the description rather than
+    # something done once by hand and remembered.
+    #
+    # CAUTION: adding an input means flake.lock has no revision for it until
+    # `nix flake update` runs once on a machine with Nix. Until then the
+    # flake does not evaluate and the error names `disko`.
+    disko = {
+      url = "github:nix-community/disko/master";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+    };
 
   outputs = { self, nixpkgs, home-manager, nixos-hardware, sops-nix, lanzaboote, nix-index-database, ... }@inputs:
     let
@@ -138,8 +153,24 @@
         ./modules/secrets.nix
         ./modules/security.nix
       ];
+
+      # The server set. A headless machine shares two of the desktop's
+      # modules — secrets, and the security posture — and drops the other
+      # eight, because every package a machine installs is surface it has to
+      # defend. The host file adds what is specific to it.
+      serverModules = [
+        ./modules/secrets.nix
+        ./modules/security.nix
+      ];
+
+      # The user layer for a headless box. home/default.nix is the desktop:
+      # shell, editor, theme, terminal, wallpaper. This is the agent, the
+      # floor, and the handful of things the agent's own tooling assumes.
+      serverHomeModules = [
+        ./home/server.nix
+      ];
     in
-      {
+    {
         nixosConfigurations = {
           beta = mkHost {
             hostName = "beta";
@@ -147,6 +178,28 @@
             hardware = nixos-hardware.nixosModules.lenovo-thinkpad-t490;
             hostPath = ./hosts/t490;
             modules = desktopModules;
+          };
+
+          # The server. Rented, and the machine that works — the agent, the
+          # hub, the floor, the night shift — while beta keeps the keys.
+          #
+          # hardware = null, because a rented guest has no chassis to
+          # profile: the module list is
+          # `nixos.lib.optional (hardware != null) hardware`, so null simply
+          # drops it. That check is in this file, a few lines up.
+          #
+          # UNBUILT as of 19 November 2026. hosts/vps/README.md separates what
+          # was verified from source from what is still an assumption. The
+          # command that settles it:
+          #
+          #   nixos-rebuild build --flake ~/Projects/nyx#vps
+          vps = mkHost {
+            hostName = "vps";
+            username = "coops";
+            hardware = null;
+            hostPath = ./hosts/vps;
+            modules = serverModules;
+            homeModules = serverHomeModules;
           };
 
           # Adding a machine looks like this. Copy hosts/t490 to hosts/<name>,
