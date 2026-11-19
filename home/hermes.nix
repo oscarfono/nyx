@@ -21,8 +21,21 @@
 #      config.yaml on disk, and it writes .env only from `environmentFiles`.
 #      Thus the values from stage 1 stay.
 #
-# CAUTION: ~/.hermes holds API keys and OAuth tokens. restic does not back up
-# ~/.hermes. See modules/backup.nix.
+# ~/.hermes holds API keys and OAuth tokens, and modules/backup.nix DOES back
+# it up: /home/<user>/.hermes is in that module's `paths`, caches excepted
+# (see the exclude list there).
+#
+# CORRECTED 19 November 2026. This comment previously said the opposite — that
+# restic "does not back up ~/.hermes" — and it was believed: a paper in the
+# Liber8 vault recorded the credentials as a single unbacked-up copy, an
+# evening's reasoning rested on it, and the error was only caught by reading
+# backup.nix rather than this file. The wrong sentence is kept above this
+# correction because the mistake is the reason the sentence exists.
+#
+# The real single point of failure is one line further on, and it is worth
+# naming here so the next reader does not have to find it: the restic
+# repository password lives in sops, backup.nix warns that losing it loses the
+# backups, and that makes the AGE KEY the thing to protect — not the data.
 
 let
   projects = "${config.home.homeDirectory}/Projects";
