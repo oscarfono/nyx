@@ -35,9 +35,26 @@ let
 
   elixir = pkgs.elixir;
 
-  # Elixir brings Erlang with it. git is needed to read provenance and to
-  # list the sources for the stamp below; curl for the launcher's wait.
-  runtime = [ elixir pkgs.git pkgs.coreutils pkgs.curl ];
+  # Every binary the unit may run, because a systemd unit's PATH is exactly
+  # this list and nothing else. The first version of this file supplied
+  # elixir, git, coreutils and curl — and the service failed with
+  # status=127 the moment the build script reached `make assets`, because
+  # `make` lives in gnumake and not in coreutils. The journal is what showed
+  # it: mix deps.get succeeded, and the very next command did not exist.
+  #
+  # bash is here because mix shells out for some tasks; findutils because
+  # mix and git plumbing use find/xargs. Anything else that goes missing is
+  # named by the preflight check at the top of the build script, rather than
+  # surfacing as a bare 127.
+  runtime = [
+    elixir
+    pkgs.bash
+    pkgs.gnumake
+    pkgs.findutils
+    pkgs.git
+    pkgs.coreutils
+    pkgs.curl
+  ];
 
   # Compile only when something moved — the same idea as the npm ci stamp
   # in gods-eye-view.nix. `mix deps.get` reaches the network, so it must
@@ -52,11 +69,31 @@ let
   # compiled something it did not.
   build = pkgs.writeShellScript "liber8-floor-build" ''
     set -eu
+
+    # THE UNIT'S PATH IS EXACTLY WHAT THE MODULE SETS, so every command used
+    # below must be named in `runtime` above. Check that first and fail with
+    # the name of whatever is missing: without this the service died on
+    # status=127 several seconds in, which says only that *something* was not
+    # found — and one of the missing commands failed silently instead, which
+    # is worse.
+    for c in mix make git cat sha256sum cut sort; do
+      command -v "$c" >/dev/null 2>&1 || {
+        echo "liber8-floor: required command not on the unit PATH: $c" >&2
+        exit 1
+      }
+    done
+
     mkdir -p _build
     stamp=_build/.nyx-src-sha256
+    # No xargs here, deliberately. The first version piped `git ls-files`
+    # through `xargs -r cat` with stderr sent to /dev/null: xargs is in
+    # findutils, which was not on the PATH, so the hash was computed from
+    # partial input, the stamp never matched, and the build re-ran on every
+    # start with nothing in the journal to say why. A silent wrong answer is
+    # worse than a loud failure.
     want=$({ cat mix.lock mix.exs
              git ls-files 'lib/*' 'config/*' 'priv/*' 'test/*' 'Makefile' \
-               | xargs -r cat 2>/dev/null
+               | LC_ALL=C sort | while read -r f; do cat "$f"; done
            } | sha256sum | cut -d' ' -f1)
     if [ -f "$stamp" ] && [ "$(cat "$stamp")" = "$want" ]; then
       exit 0
