@@ -98,7 +98,16 @@
   # Network
   # ---------------------------------------------------------------------
   networking.networkmanager = {
-    enable = true;
+    # mkDefault, NOT a bare true. This module is the DESKTOP posture — MAC
+    # randomisation, Wi-Fi, NetworkManager as the network manager — and it is
+    # imported by the server as well, for sops, the firewall and apparmor.
+    # Written as a plain `true` it collided with the server's `false` and the
+    # build stopped with "conflicting definition values", which is the build
+    # being right: a headless cloud guest has no business running
+    # NetworkManager, and randomising the MAC of a NIC whose DHCP lease the
+    # provider ties to that MAC is worse than pointless. A machine that is not
+    # a desktop chooses for itself; this is the default it chooses against.
+    enable = lib.mkDefault true;
     wifi.macAddress = "random";
     ethernet.macAddress = "random";
     dns = "systemd-resolved";

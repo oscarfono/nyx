@@ -77,6 +77,10 @@
   # A listing means EFI, "No such file or directory" means BIOS. Either answer
   # is now fine, which is the point — but it is worth knowing which one you got,
   # because it decides whether /boot is being read from the ESP.
+  # Lanzaboote is enabled by modules/security.nix for every host; this is the
+  # host that turns it off, with the reason written above.
+  boot.lanzaboote.enable = lib.mkForce false;
+
   boot.loader = {
     efi.canTouchEfiVariables = false;
     grub = {
@@ -87,12 +91,19 @@
       useOSProber = false;
     };
     systemd-boot.enable = lib.mkForce false;
-    # NOT lanzaboote. Secure Boot on a rented guest belongs to the provider's
-    # firmware — our own keys cannot be enrolled in someone else's boot chain,
-    # and the flake imports lanzaboote's module for every host. It stays
-    # disabled here, and its presence must not be read as protection. GRUB does
-    # not change that.
   };
+
+  # NOT lanzaboote, AND THIS IS THE LINE THE OLD COMMENT ONLY CLAIMED.
+  #
+  # security.nix enables lanzaboote unconditionally — it is the desktop's
+  # Secure Boot story, and it is right there. Here it is wrong twice over:
+  # Secure Boot on a rented guest belongs to the provider's firmware and our own
+  # keys cannot be enrolled in someone else's boot chain; and lanzaboote is
+  # incompatible with GRUB, which is what this host boots with, so leaving it
+  # enabled fails the build on an assertion. The comment said "it stays disabled
+  # here" for a whole day while nothing disabled it — the same defect as the
+  # disko comment that said "by-id, not /dev/vda" above a line that said
+  # /dev/vda. **A comment is not a setting.**
 
   # =====================================================================
   # REMOTE UNLOCK — the reason encryption is possible on a box with no
@@ -114,18 +125,56 @@
   #      is NOT a sign of tampering. Do not "fix" it by trusting the key.
   # =====================================================================
   boot.initrd.network = {
+    # Required as well as the ssh block below: initrd-ssh.nix only activates at
+    # all when (boot.initrd.network.enable || boot.initrd.systemd.network.enable)
+    # is true, so the ssh options alone would be inert. Verified in the module at
+    # the revision this flake pins.
     enable = true;
     ssh = {
       enable = true;
       port = 2222;              # not 22: it is the initrd, not the system
+
+      # THE ONE LINE THAT MUST BE REPLACED BEFORE THIS BOX MATTERS.
+      #
+      # initrd-ssh.nix asserts that at least one key is present, and it does not
+      # care whether the key is real — so a placeholder passes the build and then
+      # fails to authenticate, which is the worst available combination: a green
+      # build and a machine that cannot be unlocked. On an encrypted box whose
+      # passphrase is only ever asked for in the initrd, that means no reboot
+      # without the provider's web console.
+      #
+      # Replace it with the Director's own PUBLIC key (`cat ~/.ssh/id_ed25519.pub`
+      # on beta). A public key is not a secret and is safe to hand over — but it
+      # is his, so the desk will not invent one.
       authorizedKeys = [
-        # REPLACE with the Director's own public key. This one line is the
-        # whole of the unlock authentication, so an empty list here means a
-        # machine that cannot be rebooted.
-        "ssh-ed25519 AAAA... director@beta"
+        "ssh-ed25519 REPLACE-WITH-THE-DIRECTORS-PUBLIC-KEY director@beta"
       ];
+
+      # And this is not optional either: the module asserts
+      #   (hostKeys != []) || ignoreEmptyHostKeys
+      # with the message "You must now pre-generate the host keys for initrd
+      # SSH." The alternative is a private host key in the Nix store, which is
+      # worse than a changing host key. So: accept empty host keys — a fresh one
+      # each boot, and a "REMOTE HOST IDENTIFICATION HAS CHANGED" warning on every
+      # unlock, which is expected here and NOT a sign of tampering.
+      ignoreEmptyHostKeys = true;
     };
   };
+
+  # ONE THING THIS FILE CANNOT PROMISE, and it is the unlock path.
+  #
+  # modules/security.nix sets boot.initrd.systemd.enable = true (it is there for
+  # TPM2 unlock). Whether the scripted boot.initrd.network.enable above is fully
+  # honoured under the systemd initrd, or whether
+  # boot.initrd.systemd.network.enable is the one that matters, was NOT settled.
+  # The module's condition accepts either and it wires the systemd side itself,
+  # so the honest position is "expected to work, unverified" — recorded rather
+  # than papered over with an extra option that could not be verified, because an
+  # unverified defensive setting is not defensive. This file has learned that
+  # twice already.
+  #
+  # The fallback is real and free: the provider's web console can type the
+  # passphrase straight into the initrd prompt, which is what it is for.
 
   # The system's own SSH is on 22 and is keys-only, set in modules/server.nix.
 

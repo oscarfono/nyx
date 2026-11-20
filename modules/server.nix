@@ -36,11 +36,18 @@
   # Keys only. No password path at all, and root cannot log in with one.
   services.openssh = {
     enable = true;
-    openFirewall = true;
+    # mkForce on both of these, and the reasoning is a distinction worth
+    # keeping: a module that states a SECURITY RULE keeps the strict value, and
+    # the machine that breaks it says so loudly at the point of breaking.
+    # Compare the NetworkManager fix in security.nix, which became an mkDefault
+    # instead — "how a machine gets its address" is a posture a machine class
+    # may decide, while "may root log in, and is port 22 open" is a rule, and a
+    # rule that yields silently to whoever imports it is not a rule.
+    openFirewall = lib.mkForce true;
     settings = {
       PasswordAuthentication = false;
       KbdInteractiveAuthentication = false;
-      PermitRootLogin = "prohibit-password";
+      PermitRootLogin = lib.mkForce "prohibit-password";
       MaxAuthTries = 3;
       # Nobody logs in as a human on this box; the Director's key does the
       # only interactive work and everything else is a service account.
@@ -73,6 +80,10 @@
       allowedUDPPorts = [ ];
     };
     # Rented hardware does not get to be a router or a discovery node.
+    # Deliberately the machine-level decision, and it now wins: the security
+    # module declares its NetworkManager posture as a default after this
+    # conflict was found. A cloud guest gets its address from DHCP on the
+    # interface the provider gave it.
     networkmanager.enable = false;
   };
 
