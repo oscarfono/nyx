@@ -144,6 +144,9 @@ in
       LUNA_EFFORT = "medium";
       LUNA_MONEY = if site.money then "1" else "0";
       LUNA_WISE = builtins.toJSON site.wise;
+      LUNA_OWNER_LOGIN = site.ownerLogin;
+      LUNA_WEB_ORIGIN = "https://${fqdn}:8443";
+      LUNA_WEB_PORT = "8090";
       GIT_AUTHOR_NAME = "LUNA";
       GIT_AUTHOR_EMAIL = "luna@${fqdn}";
       GIT_COMMITTER_NAME = "LUNA";

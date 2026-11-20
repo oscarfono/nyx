@@ -6,6 +6,8 @@ from datetime import datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
+import asyncio
+
 import anthropic
 
 from .audit import AuditLog
@@ -54,6 +56,8 @@ class Agent:
         self.last_message: datetime | None = None
         self.taint = Taint()
         self.outbound_removed = False
+        # Matrix and the web app share one conversation. One question at a time.
+        self.lock = asyncio.Lock()
 
     def now(self) -> datetime:
         return datetime.now(self.zone)
@@ -64,7 +68,31 @@ class Agent:
         self.outbound_removed = False
         self.audit.write("agent.reset")
 
-    async def ask(self, text: str) -> str:
+    async def ask(self, text: str, images: list[tuple[str, str]] | tuple = ()) -> str:
+        async with self.lock:
+            return await self._ask(text, list(images))
+
+    def transcript(self, limit: int = 100) -> list[dict[str, str]]:
+        """The text of the conversation, for the web app. Tool blocks are omitted."""
+        out: list[dict[str, str]] = []
+        for message in self.history:
+            role, content = message.get("role"), message.get("content")
+            if role == "user" and isinstance(content, str):
+                out.append({"role": "user", "text": content.split("\n", 1)[-1]})
+            elif role == "user" and isinstance(content, list):
+                texts = [b["text"] for b in content if isinstance(b, dict) and b.get("type") == "text"]
+                if texts or any(isinstance(b, dict) and b.get("type") == "image" for b in content):
+                    body = "\n".join(t.split("\n", 1)[-1] for t in texts)
+                    if any(isinstance(b, dict) and b.get("type") == "image" for b in content):
+                        body += "\n[image]"
+                    out.append({"role": "user", "text": body.strip()})
+            elif role == "assistant" and isinstance(content, list):
+                texts = [getattr(b, "text", None) for b in content if getattr(b, "type", None) == "text"]
+                if any(texts):
+                    out.append({"role": "assistant", "text": "\n\n".join(t for t in texts if t)})
+        return out[-limit:]
+
+    async def _ask(self, text: str, images: list[tuple[str, str]]) -> str:
         now = self.now()
         idle = self.last_message is not None and now - self.last_message > IDLE_RESET
         if idle or len(self.history) > MAX_MESSAGES:
@@ -72,8 +100,15 @@ class Agent:
         self.last_message = now
 
         stamp = now.strftime("%A %Y-%m-%d %H:%M %Z")
-        self.history.append({"role": "user", "content": f"[{stamp}]\n{text}"})
-        self.audit.write("agent.ask", chars=len(text))
+        if images:
+            content: Any = [
+                {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": data}}
+                for media_type, data in images
+            ] + [{"type": "text", "text": f"[{stamp}]\n{text}"}]
+        else:
+            content = f"[{stamp}]\n{text}"
+        self.history.append({"role": "user", "content": content})
+        self.audit.write("agent.ask", chars=len(text), images=len(images))
         try:
             last = await self._run()
         except anthropic.RateLimitError:

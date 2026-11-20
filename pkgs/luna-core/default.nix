@@ -11,6 +11,7 @@ python3Packages.buildPythonApplication {
 
   build-system = [ python3Packages.setuptools ];
   dependencies = with python3Packages; [
+    aiohttp
     anthropic
     httpx
     markdown

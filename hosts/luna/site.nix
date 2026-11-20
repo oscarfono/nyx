@@ -10,6 +10,9 @@
     (builtins.readFile ../../luna/keys/luna_ed25519.pub)
   ];
 
+  # The Tailscale login of the owner. Only this login can open the web app.
+  ownerLogin = "cooper@oscarfono.com";
+
   # The server clock uses UTC. LUNA uses your time zone for briefs and dates.
   timeZone = "UTC";
   ownerTimeZone = "Australia/Perth";

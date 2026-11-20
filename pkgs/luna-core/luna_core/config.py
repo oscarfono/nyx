@@ -38,6 +38,9 @@ class Config:
     telegram_token: str | None
     telegram_chat_id: str | None
     money_enabled: bool = False
+    owner_login: str = ""
+    web_origin: str = ""
+    web_port: int = 8090
     wise_json: str = '{"mode": "off"}'
     wise_token: str | None = None
 
@@ -74,6 +77,9 @@ def load() -> Config:
         telegram_token=_credential("telegram_token"),
         telegram_chat_id=_credential("telegram_chat_id"),
         money_enabled=env("LUNA_MONEY", "0") == "1",
+        owner_login=env("LUNA_OWNER_LOGIN", ""),
+        web_origin=env("LUNA_WEB_ORIGIN", ""),
+        web_port=int(env("LUNA_WEB_PORT", "8090")),
         wise_json=env("LUNA_WISE", '{"mode": "off"}'),
         wise_token=_credential("wise_api_token"),
     )

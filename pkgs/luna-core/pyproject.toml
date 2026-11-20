@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "luna-core"
 version = "0.1.0"
 requires-python = ">=3.12"
-dependencies = ["anthropic>=2.3", "httpx", "markdown", "matrix-nio", "tzdata"]
+dependencies = ["aiohttp", "anthropic>=2.3", "httpx", "markdown", "matrix-nio", "tzdata"]
 
 [project.scripts]
 luna-core = "luna_core.main:main"

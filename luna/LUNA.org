@@ -459,6 +459,9 @@ Edit these values before the first install.
     (builtins.readFile ../../luna/keys/luna_ed25519.pub)
   ];
 
+  # The Tailscale login of the owner. Only this login can open the web app.
+  ownerLogin = "cooper@oscarfono.com";
+
   # The server clock uses UTC. LUNA uses your time zone for briefs and dates.
   timeZone = "UTC";
   ownerTimeZone = "Australia/Perth";
@@ -863,6 +866,8 @@ in
     };
     script = ''
       ${config.services.tailscale.package}/bin/tailscale serve --bg --https=443 http://127.0.0.1:8008
+      # The LUNA web app. Refer to "Build: the web app".
+      ${config.services.tailscale.package}/bin/tailscale serve --bg --https=8443 http://127.0.0.1:8090
     '';
   };
 
@@ -1028,6 +1033,9 @@ in
       LUNA_EFFORT = "medium";
       LUNA_MONEY = if site.money then "1" else "0";
       LUNA_WISE = builtins.toJSON site.wise;
+      LUNA_OWNER_LOGIN = site.ownerLogin;
+      LUNA_WEB_ORIGIN = "https://${fqdn}:8443";
+      LUNA_WEB_PORT = "8090";
       GIT_AUTHOR_NAME = "LUNA";
       GIT_AUTHOR_EMAIL = "luna@${fqdn}";
       GIT_COMMITTER_NAME = "LUNA";
@@ -1091,6 +1099,7 @@ python3Packages.buildPythonApplication {
 
   build-system = [ python3Packages.setuptools ];
   dependencies = with python3Packages; [
+    aiohttp
     anthropic
     httpx
     markdown
@@ -1116,7 +1125,7 @@ build-backend = "setuptools.build_meta"
 name = "luna-core"
 version = "0.1.0"
 requires-python = ">=3.12"
-dependencies = ["anthropic>=2.3", "httpx", "markdown", "matrix-nio", "tzdata"]
+dependencies = ["aiohttp", "anthropic>=2.3", "httpx", "markdown", "matrix-nio", "tzdata"]
 
 [project.scripts]
 luna-core = "luna_core.main:main"
@@ -1175,6 +1184,9 @@ class Config:
     telegram_token: str | None
     telegram_chat_id: str | None
     money_enabled: bool = False
+    owner_login: str = ""
+    web_origin: str = ""
+    web_port: int = 8090
     wise_json: str = '{"mode": "off"}'
     wise_token: str | None = None
 
@@ -1211,6 +1223,9 @@ def load() -> Config:
         telegram_token=_credential("telegram_token"),
         telegram_chat_id=_credential("telegram_chat_id"),
         money_enabled=env("LUNA_MONEY", "0") == "1",
+        owner_login=env("LUNA_OWNER_LOGIN", ""),
+        web_origin=env("LUNA_WEB_ORIGIN", ""),
+        web_port=int(env("LUNA_WEB_PORT", "8090")),
         wise_json=env("LUNA_WISE", '{"mode": "off"}'),
         wise_token=_credential("wise_api_token"),
     )
@@ -1670,6 +1685,8 @@ from datetime import datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
+import asyncio
+
 import anthropic
 
 from .audit import AuditLog
@@ -1718,6 +1735,8 @@ class Agent:
         self.last_message: datetime | None = None
         self.taint = Taint()
         self.outbound_removed = False
+        # Matrix and the web app share one conversation. One question at a time.
+        self.lock = asyncio.Lock()
 
     def now(self) -> datetime:
         return datetime.now(self.zone)
@@ -1728,7 +1747,31 @@ class Agent:
         self.outbound_removed = False
         self.audit.write("agent.reset")
 
-    async def ask(self, text: str) -> str:
+    async def ask(self, text: str, images: list[tuple[str, str]] | tuple = ()) -> str:
+        async with self.lock:
+            return await self._ask(text, list(images))
+
+    def transcript(self, limit: int = 100) -> list[dict[str, str]]:
+        """The text of the conversation, for the web app. Tool blocks are omitted."""
+        out: list[dict[str, str]] = []
+        for message in self.history:
+            role, content = message.get("role"), message.get("content")
+            if role == "user" and isinstance(content, str):
+                out.append({"role": "user", "text": content.split("\n", 1)[-1]})
+            elif role == "user" and isinstance(content, list):
+                texts = [b["text"] for b in content if isinstance(b, dict) and b.get("type") == "text"]
+                if texts or any(isinstance(b, dict) and b.get("type") == "image" for b in content):
+                    body = "\n".join(t.split("\n", 1)[-1] for t in texts)
+                    if any(isinstance(b, dict) and b.get("type") == "image" for b in content):
+                        body += "\n[image]"
+                    out.append({"role": "user", "text": body.strip()})
+            elif role == "assistant" and isinstance(content, list):
+                texts = [getattr(b, "text", None) for b in content if getattr(b, "type", None) == "text"]
+                if any(texts):
+                    out.append({"role": "assistant", "text": "\n\n".join(t for t in texts if t)})
+        return out[-limit:]
+
+    async def _ask(self, text: str, images: list[tuple[str, str]]) -> str:
         now = self.now()
         idle = self.last_message is not None and now - self.last_message > IDLE_RESET
         if idle or len(self.history) > MAX_MESSAGES:
@@ -1736,8 +1779,15 @@ class Agent:
         self.last_message = now
 
         stamp = now.strftime("%A %Y-%m-%d %H:%M %Z")
-        self.history.append({"role": "user", "content": f"[{stamp}]\n{text}"})
-        self.audit.write("agent.ask", chars=len(text))
+        if images:
+            content: Any = [
+                {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": data}}
+                for media_type, data in images
+            ] + [{"type": "text", "text": f"[{stamp}]\n{text}"}]
+        else:
+            content = f"[{stamp}]\n{text}"
+        self.history.append({"role": "user", "content": content})
+        self.audit.write("agent.ask", chars=len(text), images=len(images))
         try:
             last = await self._run()
         except anthropic.RateLimitError:
@@ -2216,6 +2266,7 @@ from .payments import PaymentLog, Payments, WiseClient, WiseSettings
 from .scheduler import brief_loop, payments_loop, sync_loop
 from .telegram import Nudger
 from .tools import build_tools
+from .web import WebApp, serve
 
 
 async def run() -> None:
@@ -2253,6 +2304,14 @@ async def run() -> None:
     if wise.mode == "draft":
         payments.notify = bot.send_owner
         watchers.append(payments_loop(payments, audit))
+    if config.owner_login and config.web_origin:
+        webapp = WebApp(
+            chat_agent, approvals, audit, config.owner_login, config.web_origin, money=money,
+            settings={"model": config.model, "money": config.money_enabled, "wise_mode": wise.mode,
+                      "wise_sandbox": wise.sandbox},
+            memory_root=config.memory_dir,
+        )
+        await serve(webapp, config.web_port)
     hour, minute = (int(part) for part in config.brief_time.split(":"))
     audit.write("luna.start", model=config.model)
     await asyncio.gather(
@@ -3961,6 +4020,602 @@ def test_auto_needs_a_matrix_approval(tmp_path):
 
 def test_reference_is_cleaned():
     assert clean_reference("Rent; DROP TABLE <x> 2026-11") == "Rent DROP TABLE x"
+#+end_src
+
+* Build: the web app
+
+The web app is at =https://luna.<tailnet>:8443=.
+=tailscale serve= publishes the app on the tailnet only.
+The app has four panels: Chat, Approvals, Money and System.
+Chat accepts a camera image with a message.
+
+** Login
+
+You do not type a password.
+=tailscale serve= adds the header =Tailscale-User-Login= to each request from a tailnet user.
+The app accepts a request only when the header is the owner login in the site values.
+The app listens on =127.0.0.1= only, so a request from outside luna cannot set the header.
+
+Each request that changes something must also have:
+- the header =Origin= with the address of the app, and
+- the header =X-Luna: 1=.
+A page on another site cannot send these headers, so cross-site requests fail.
+
+** Camera
+
+The browser lists each camera that is connected to the computer.
+"Show LUNA" takes one frame, and makes the frame 1280 pixels wide or less.
+The frame goes with the next message to the Claude API.
+LUNA does not keep the image on luna.
+
+** Safety of the page
+
+The page shows each reply as plain text, not as HTML.
+A reply cannot run a script in the page, even if a web page told the model to write one.
+The Content-Security-Policy allows scripts from the app only.
+
+** Web server
+
+#+begin_src python :tangle ../pkgs/luna-core/luna_core/web.py
+"""The LUNA web app: chat, approvals, money and system. Tailnet only."""
+
+from __future__ import annotations
+
+import base64
+import binascii
+import json
+import subprocess
+from datetime import UTC, datetime
+from typing import Any
+
+from aiohttp import web
+
+from .approvals import Approvals
+from .audit import AuditLog
+from .sysinfo import update_notice
+from .web_page import APP_CSS, APP_JS, INDEX_HTML
+
+LOGIN_HEADER = "Tailscale-User-Login"
+IMAGE_TYPES = frozenset({"image/jpeg", "image/png", "image/webp"})
+MAX_IMAGE_BYTES = 5 * 1024 * 1024
+CSP = (
+    "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; "
+    "media-src 'self' blob:; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+)
+
+
+class WebApp:
+    def __init__(self, agent: Any, approvals: Approvals, audit: AuditLog, owner_login: str, origin: str,
+                 money: Any = None, settings: dict[str, Any] | None = None, memory_root: Any = None) -> None:
+        self.agent = agent
+        self.approvals = approvals
+        self.audit = audit
+        self.owner_login = owner_login
+        self.origin = origin
+        self.money = money
+        self.settings = settings or {}
+        self.memory_root = memory_root
+        self.started = datetime.now(UTC)
+
+    def app(self) -> web.Application:
+        app = web.Application(middlewares=[self.guard], client_max_size=8 * 1024 * 1024)
+        app.add_routes([
+            web.get("/", self.index),
+            web.get("/app.js", self.script),
+            web.get("/app.css", self.style),
+            web.get("/api/history", self.history),
+            web.post("/api/chat", self.chat),
+            web.get("/api/approvals", self.list_approvals),
+            web.post("/api/approvals/{id}/{action}", self.decide),
+            web.get("/api/money", self.money_panel),
+            web.get("/api/system", self.system),
+        ])
+        return app
+
+    @web.middleware
+    async def guard(self, request: web.Request, handler: Any) -> web.StreamResponse:
+        login = request.headers.get(LOGIN_HEADER)
+        if login != self.owner_login:
+            self.audit.write("web.refused", reason="login", path=request.path)
+            return web.Response(status=403, text="LUNA: this page is for the owner only.")
+        if request.method != "GET":
+            if request.headers.get("Origin") != self.origin or request.headers.get("X-Luna") != "1":
+                self.audit.write("web.refused", reason="origin", path=request.path)
+                return web.Response(status=403, text="LUNA: the request has no valid origin.")
+        response = await handler(request)
+        response.headers["Content-Security-Policy"] = CSP
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
+    async def index(self, _: web.Request) -> web.Response:
+        return web.Response(text=INDEX_HTML, content_type="text/html")
+
+    async def script(self, _: web.Request) -> web.Response:
+        return web.Response(text=APP_JS, content_type="application/javascript")
+
+    async def style(self, _: web.Request) -> web.Response:
+        return web.Response(text=APP_CSS, content_type="text/css")
+
+    async def history(self, _: web.Request) -> web.Response:
+        return web.json_response({"messages": self.agent.transcript()})
+
+    async def chat(self, request: web.Request) -> web.Response:
+        body = await request.json()
+        text = str(body.get("text", "")).strip()
+        image = body.get("image")
+        images: list[tuple[str, str]] = []
+        if image:
+            media_type = str(image.get("media_type", ""))
+            data = str(image.get("data", ""))
+            if media_type not in IMAGE_TYPES:
+                return web.json_response({"error": "LUNA accepts JPEG, PNG or WebP images."}, status=400)
+            try:
+                size = len(base64.b64decode(data, validate=True))
+            except (binascii.Error, ValueError):
+                return web.json_response({"error": "The image data is not valid base64."}, status=400)
+            if size > MAX_IMAGE_BYTES:
+                return web.json_response({"error": "The image is more than 5 MB."}, status=400)
+            images.append((media_type, data))
+        if not text and not images:
+            return web.json_response({"error": "Write a message."}, status=400)
+        self.audit.write("web.chat", chars=len(text), images=len(images))
+        reply = await self.agent.ask(text or "What do you see?", images=images)
+        return web.json_response({"reply": reply})
+
+    async def list_approvals(self, _: web.Request) -> web.Response:
+        items = [{"id": i.id, "summary": i.summary, "created": i.created} for i in self.approvals.pending()]
+        return web.json_response({"approvals": items})
+
+    async def decide(self, request: web.Request) -> web.Response:
+        request_id, action = request.match_info["id"], request.match_info["action"]
+        if action == "approve":
+            result = await self.approvals.approve(request_id)
+        elif action == "deny":
+            result = self.approvals.deny(request_id)
+        else:
+            return web.json_response({"error": "Use approve or deny."}, status=400)
+        self.audit.write("web.decision", id=request_id, action=action)
+        return web.json_response({"result": result})
+
+    async def money_panel(self, _: web.Request) -> web.Response:
+        if self.money is None:
+            return web.json_response({"text": "Money is off. Refer to 'The gate for phase 2' in LUNA.org."})
+        return web.json_response({"text": self.money.summary()})
+
+    async def system(self, _: web.Request) -> web.Response:
+        today = datetime.now(UTC).date()
+        last_commit = ""
+        if self.memory_root is not None:
+            result = subprocess.run(["git", "-C", str(self.memory_root), "log", "-1", "--format=%h %s (%cr)"],
+                                    capture_output=True, text=True, check=False)
+            last_commit = result.stdout.strip()
+        events = []
+        try:
+            lines = self.audit.path.read_text(encoding="utf-8").splitlines()[-15:]
+        except OSError:
+            lines = []
+        for line in lines:
+            record = json.loads(line)
+            events.append({"time": record.get("time", ""), "event": record.get("event", "")})
+        return web.json_response({
+            "started": self.started.isoformat(),
+            "update": update_notice(today) or "nixpkgs is less than 14 days old.",
+            "memory": last_commit,
+            "settings": self.settings,
+            "pending_approvals": len(self.approvals.pending()),
+            "events": events,
+        })
+
+
+async def serve(webapp: WebApp, port: int) -> None:
+    """Run the web app on 127.0.0.1 until the process stops."""
+    runner = web.AppRunner(webapp.app(), access_log=None)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", port)
+    await site.start()
+    webapp.audit.write("web.ready", port=port)
+#+end_src
+
+** Web page
+
+The page has no external files. The browser loads nothing from the internet.
+
+#+begin_src python :tangle ../pkgs/luna-core/luna_core/web_page.py
+"""The page, the script and the style of the LUNA web app."""
+
+INDEX_HTML = """<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LUNA</title>
+<link rel="stylesheet" href="/app.css">
+<script src="/app.js" defer></script>
+</head>
+<body>
+<header>
+  <h1>LUNA</h1>
+  <nav>
+    <button data-panel="chat" class="active">Chat</button>
+    <button data-panel="approvals">Approvals <span id="approval-count"></span></button>
+    <button data-panel="money">Money</button>
+    <button data-panel="system">System</button>
+  </nav>
+</header>
+<main>
+  <section id="chat" class="panel active">
+    <div id="messages" aria-live="polite"></div>
+    <div id="camera" hidden>
+      <video id="video" autoplay playsinline muted></video>
+      <div class="row">
+        <select id="camera-list" aria-label="Camera"></select>
+        <button id="snap">Show LUNA</button>
+        <button id="camera-close">Close camera</button>
+      </div>
+    </div>
+    <div id="attachment" hidden><img id="preview" alt="Image for LUNA"><button id="drop">Remove image</button></div>
+    <form id="composer">
+      <button type="button" id="camera-open" title="Camera">Camera</button>
+      <textarea id="input" rows="2" placeholder="Message LUNA. Enter sends, Shift+Enter is a new line."></textarea>
+      <button id="send" type="submit">Send</button>
+    </form>
+  </section>
+  <section id="approvals" class="panel"><div id="approval-list"></div></section>
+  <section id="money" class="panel"><pre id="money-text"></pre></section>
+  <section id="system" class="panel"><div id="system-info"></div></section>
+</main>
+</body>
+</html>
+"""
+
+APP_CSS = """
+:root { --bg: #0e1116; --panel: #161b22; --text: #e6edf3; --muted: #8b949e; --accent: #b392f0; --mine: #1f2937; }
+@media (prefers-color-scheme: light) {
+  :root { --bg: #f6f8fa; --panel: #ffffff; --text: #1f2328; --muted: #57606a; --accent: #6f42c1; --mine: #eef1f5; }
+}
+,* { box-sizing: border-box; }
+body { margin: 0; font: 16px/1.5 system-ui, sans-serif; background: var(--bg); color: var(--text); }
+header { display: flex; align-items: center; justify-content: space-between; padding: 8px 16px;
+         background: var(--panel); border-bottom: 1px solid #30363d; flex-wrap: wrap; gap: 8px; }
+h1 { margin: 0; font-size: 20px; letter-spacing: 4px; color: var(--accent); }
+nav button, button { background: none; border: 1px solid #30363d; color: var(--text); padding: 6px 12px;
+                     border-radius: 6px; cursor: pointer; font: inherit; }
+nav button.active { border-color: var(--accent); color: var(--accent); }
+main { max-width: 900px; margin: 0 auto; padding: 16px; }
+.panel { display: none; } .panel.active { display: block; }
+#messages { display: flex; flex-direction: column; gap: 10px; min-height: 50vh; margin-bottom: 12px; }
+.msg { padding: 10px 14px; border-radius: 10px; white-space: pre-wrap; word-wrap: break-word; max-width: 90%; }
+.msg.user { align-self: flex-end; background: var(--mine); }
+.msg.assistant { align-self: flex-start; background: var(--panel); border: 1px solid #30363d; }
+.msg.wait { color: var(--muted); font-style: italic; }
+#composer { display: flex; gap: 8px; align-items: flex-end; }
+textarea { flex: 1; resize: vertical; background: var(--panel); color: var(--text); border: 1px solid #30363d;
+           border-radius: 6px; padding: 8px; font: inherit; }
+#camera video { width: 100%; max-height: 50vh; background: #000; border-radius: 8px; }
+.row { display: flex; gap: 8px; margin: 8px 0; flex-wrap: wrap; }
+#attachment img { max-height: 120px; border-radius: 6px; display: block; margin-bottom: 6px; }
+.card { background: var(--panel); border: 1px solid #30363d; border-radius: 8px; padding: 12px; margin-bottom: 10px;
+        white-space: pre-wrap; }
+pre { background: var(--panel); padding: 12px; border-radius: 8px; white-space: pre-wrap; }
+table { border-collapse: collapse; width: 100%; } td { padding: 4px 8px; border-bottom: 1px solid #30363d; }
+.muted { color: var(--muted); }
+"""
+
+APP_JS = r"""
+"use strict";
+const $ = (id) => document.getElementById(id);
+let image = null;
+let stream = null;
+
+async function api(path, options = {}) {
+  const init = { ...options, headers: { "Content-Type": "application/json", "X-Luna": "1", ...(options.headers || {}) } };
+  const response = await fetch(path, init);
+  const data = await response.json().catch(() => ({ error: response.statusText }));
+  if (!response.ok) throw new Error(data.error || response.statusText);
+  return data;
+}
+
+function element(tag, cls, text) {
+  const node = document.createElement(tag);
+  if (cls) node.className = cls;
+  if (text !== undefined) node.textContent = text;
+  return node;
+}
+
+function addMessage(role, text) {
+  const node = element("div", "msg " + role, text);
+  $("messages").appendChild(node);
+  node.scrollIntoView({ behavior: "smooth", block: "end" });
+  return node;
+}
+
+async function loadHistory() {
+  const data = await api("/api/history");
+  $("messages").replaceChildren();
+  for (const m of data.messages) addMessage(m.role, m.text);
+}
+
+async function send(event) {
+  event.preventDefault();
+  const text = $("input").value.trim();
+  if (!text && !image) return;
+  addMessage("user", text + (image ? "\n[image]" : ""));
+  const body = { text };
+  if (image) body.image = image;
+  $("input").value = "";
+  clearImage();
+  const waiting = addMessage("assistant wait", "LUNA is thinking...");
+  $("send").disabled = true;
+  try {
+    const data = await api("/api/chat", { method: "POST", body: JSON.stringify(body) });
+    waiting.className = "msg assistant";
+    waiting.textContent = data.reply;
+  } catch (error) {
+    waiting.textContent = "Error: " + error.message;
+  } finally {
+    $("send").disabled = false;
+    refreshApprovals();
+  }
+}
+
+async function openCamera() {
+  $("camera").hidden = false;
+  const devices = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === "videoinput");
+  const list = $("camera-list");
+  list.replaceChildren();
+  devices.forEach((d, i) => list.appendChild(new Option(d.label || "Camera " + (i + 1), d.deviceId)));
+  await startCamera(list.value);
+}
+
+async function startCamera(deviceId) {
+  if (stream) stream.getTracks().forEach((t) => t.stop());
+  stream = await navigator.mediaDevices.getUserMedia({ video: deviceId ? { deviceId: { exact: deviceId } } : true });
+  $("video").srcObject = stream;
+  // After the first permission, the browser shows the camera names.
+  const list = $("camera-list");
+  if ([...list.options].some((o) => !o.text || o.text.startsWith("Camera "))) {
+    const devices = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === "videoinput");
+    const current = list.value;
+    list.replaceChildren();
+    devices.forEach((d, i) => list.appendChild(new Option(d.label || "Camera " + (i + 1), d.deviceId)));
+    list.value = current;
+  }
+}
+
+function closeCamera() {
+  if (stream) stream.getTracks().forEach((t) => t.stop());
+  stream = null;
+  $("camera").hidden = true;
+}
+
+function snap() {
+  const video = $("video");
+  const scale = Math.min(1, 1280 / video.videoWidth);
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.round(video.videoWidth * scale);
+  canvas.height = Math.round(video.videoHeight * scale);
+  canvas.getContext("2d").drawImage(video, 0, 0, canvas.width, canvas.height);
+  const url = canvas.toDataURL("image/jpeg", 0.85);
+  image = { media_type: "image/jpeg", data: url.split(",")[1] };
+  $("preview").src = url;
+  $("attachment").hidden = false;
+  closeCamera();
+  $("input").focus();
+}
+
+function clearImage() {
+  image = null;
+  $("attachment").hidden = true;
+  $("preview").removeAttribute("src");
+}
+
+async function refreshApprovals() {
+  const data = await api("/api/approvals");
+  $("approval-count").textContent = data.approvals.length ? "(" + data.approvals.length + ")" : "";
+  const list = $("approval-list");
+  list.replaceChildren();
+  if (!data.approvals.length) list.appendChild(element("p", "muted", "No requests wait for you."));
+  for (const item of data.approvals) {
+    const card = element("div", "card", item.summary + "\n");
+    card.appendChild(element("div", "muted", item.id + " - " + item.created));
+    const row = element("div", "row");
+    for (const action of ["approve", "deny"]) {
+      const button = element("button", "", action === "approve" ? "Approve" : "Deny");
+      button.addEventListener("click", async () => {
+        button.disabled = true;
+        const result = await api("/api/approvals/" + item.id + "/" + action, { method: "POST", body: "{}" });
+        card.replaceChildren(element("div", "", result.result));
+        refreshApprovals();
+      });
+      row.appendChild(button);
+    }
+    card.appendChild(row);
+    list.appendChild(card);
+  }
+}
+
+async function loadMoney() {
+  $("money-text").textContent = "Loading...";
+  $("money-text").textContent = (await api("/api/money")).text;
+}
+
+async function loadSystem() {
+  const data = await api("/api/system");
+  const box = $("system-info");
+  box.replaceChildren();
+  const table = element("table");
+  const rows = [
+    ["Started", data.started], ["Updates", data.update], ["Memory", data.memory],
+    ["Waiting approvals", String(data.pending_approvals)],
+    ...Object.entries(data.settings).map(([k, v]) => [k, typeof v === "object" ? JSON.stringify(v) : String(v)]),
+  ];
+  for (const [k, v] of rows) {
+    const tr = element("tr");
+    tr.appendChild(element("td", "muted", k));
+    tr.appendChild(element("td", "", v));
+    table.appendChild(tr);
+  }
+  box.appendChild(table);
+  box.appendChild(element("h3", "", "Recent events"));
+  const log = element("pre");
+  log.textContent = data.events.map((e) => e.time.slice(0, 19).replace("T", " ") + "  " + e.event).join("\n");
+  box.appendChild(log);
+}
+
+function show(panel) {
+  document.querySelectorAll("nav button").forEach((b) => b.classList.toggle("active", b.dataset.panel === panel));
+  document.querySelectorAll(".panel").forEach((p) => p.classList.toggle("active", p.id === panel));
+  if (panel === "approvals") refreshApprovals();
+  if (panel === "money") loadMoney().catch((e) => ($("money-text").textContent = "Error: " + e.message));
+  if (panel === "system") loadSystem();
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+  document.querySelectorAll("nav button").forEach((b) => b.addEventListener("click", () => show(b.dataset.panel)));
+  $("composer").addEventListener("submit", send);
+  $("input").addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) send(e); });
+  $("camera-open").addEventListener("click", () => openCamera().catch((e) => alertInChat(e)));
+  $("camera-list").addEventListener("change", (e) => startCamera(e.target.value));
+  $("camera-close").addEventListener("click", closeCamera);
+  $("snap").addEventListener("click", snap);
+  $("drop").addEventListener("click", clearImage);
+  loadHistory().catch((e) => addMessage("assistant wait", "Error: " + e.message));
+  refreshApprovals().catch(() => {});
+  setInterval(() => refreshApprovals().catch(() => {}), 30000);
+});
+
+function alertInChat(error) { addMessage("assistant wait", "Camera error: " + error.message); }
+"""
+#+end_src
+
+** Web tests
+
+#+begin_src python :tangle ../pkgs/luna-core/tests/test_web.py
+import asyncio
+import base64
+
+from aiohttp.test_utils import TestClient, TestServer
+
+from luna_core.approvals import Approvals
+from luna_core.audit import AuditLog
+from luna_core.web import WebApp
+
+OWNER = "cooper@oscarfono.com"
+ORIGIN = "https://luna.example.ts.net:8443"
+GOOD = {"Tailscale-User-Login": OWNER, "Origin": ORIGIN, "X-Luna": "1"}
+
+
+class FakeAgent:
+    def __init__(self):
+        self.asked = []
+
+    async def ask(self, text, images=()):
+        self.asked.append((text, list(images)))
+        return "reply: " + text
+
+    def transcript(self):
+        return [{"role": "user", "text": "hello"}, {"role": "assistant", "text": "hi"}]
+
+
+def make(tmp_path):
+    (tmp_path / "approvals").mkdir()
+    audit = AuditLog(tmp_path / "audit.jsonl")
+    (tmp_path / "audit.jsonl").write_text("")
+    approvals = Approvals(tmp_path / "approvals", audit)
+    calls = []
+
+    async def executor(params):
+        calls.append(params)
+        return "done"
+
+    approvals.register("test", executor)
+    agent = FakeAgent()
+    return WebApp(agent, approvals, audit, OWNER, ORIGIN), agent, approvals, calls
+
+
+def run(webapp, scenario):
+    async def go():
+        async with TestClient(TestServer(webapp.app())) as client:
+            return await scenario(client)
+    return asyncio.run(go())
+
+
+def test_no_login_is_refused(tmp_path):
+    webapp, *_ = make(tmp_path)
+    async def scenario(client):
+        return (await client.get("/")).status, (await client.get("/", headers={"Tailscale-User-Login": "x@y"})).status
+    assert run(webapp, scenario) == (403, 403)
+
+
+def test_owner_gets_the_page_with_a_strict_policy(tmp_path):
+    webapp, *_ = make(tmp_path)
+    async def scenario(client):
+        response = await client.get("/", headers={"Tailscale-User-Login": OWNER})
+        return response.status, response.headers["Content-Security-Policy"], await response.text()
+    status, csp, text = run(webapp, scenario)
+    assert status == 200 and "script-src 'self'" in csp and "<title>LUNA</title>" in text
+
+
+def test_post_needs_origin_and_header(tmp_path):
+    webapp, agent, *_ = make(tmp_path)
+    async def scenario(client):
+        bad = await client.post("/api/chat", json={"text": "x"}, headers={"Tailscale-User-Login": OWNER})
+        other = await client.post("/api/chat", json={"text": "x"},
+                                  headers={**GOOD, "Origin": "https://evil.example"})
+        return bad.status, other.status
+    assert run(webapp, scenario) == (403, 403)
+    assert agent.asked == []
+
+
+def test_chat_with_an_image(tmp_path):
+    webapp, agent, *_ = make(tmp_path)
+    data = base64.b64encode(b"\xff\xd8fake-jpeg").decode()
+    async def scenario(client):
+        response = await client.post("/api/chat", headers=GOOD,
+                                     json={"text": "what is this?", "image": {"media_type": "image/jpeg", "data": data}})
+        return response.status, await response.json()
+    status, body = run(webapp, scenario)
+    assert status == 200 and body["reply"] == "reply: what is this?"
+    assert agent.asked == [("what is this?", [("image/jpeg", data)])]
+
+
+def test_bad_image_is_refused(tmp_path):
+    webapp, agent, *_ = make(tmp_path)
+    async def scenario(client):
+        a = await client.post("/api/chat", headers=GOOD, json={"text": "x", "image": {"media_type": "image/gif", "data": "AA=="}})
+        b = await client.post("/api/chat", headers=GOOD, json={"text": "x", "image": {"media_type": "image/png", "data": "not base64!"}})
+        return a.status, b.status
+    assert run(webapp, scenario) == (400, 400)
+    assert agent.asked == []
+
+
+def test_approve_from_the_page(tmp_path):
+    webapp, _, approvals, calls = make(tmp_path)
+    item = asyncio.run(approvals.request("test", {"x": 1}, "Test payment"))
+    async def scenario(client):
+        listed = await (await client.get("/api/approvals", headers=GOOD)).json()
+        result = await (await client.post(f"/api/approvals/{item.id}/approve", headers=GOOD, json={})).json()
+        return listed, result
+    listed, result = run(webapp, scenario)
+    assert listed["approvals"][0]["summary"] == "Test payment"
+    assert result["result"] == "done" and calls == [{"x": 1}]
+
+
+def test_money_is_off_by_default(tmp_path):
+    webapp, *_ = make(tmp_path)
+    async def scenario(client):
+        return await (await client.get("/api/money", headers=GOOD)).json()
+    assert "Money is off" in run(webapp, scenario)["text"]
+
+
+def test_system_panel(tmp_path):
+    webapp, *_ = make(tmp_path)
+    async def scenario(client):
+        return await (await client.get("/api/system", headers=GOOD)).json()
+    data = run(webapp, scenario)
+    assert data["pending_approvals"] == 0 and "update" in data
 #+end_src
 
 * Memory seed files

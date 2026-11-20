@@ -58,6 +58,8 @@ in
     };
     script = ''
       ${config.services.tailscale.package}/bin/tailscale serve --bg --https=443 http://127.0.0.1:8008
+      # The LUNA web app. Refer to "Build: the web app".
+      ${config.services.tailscale.package}/bin/tailscale serve --bg --https=8443 http://127.0.0.1:8090
     '';
   };
 
