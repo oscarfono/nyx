@@ -11,6 +11,7 @@ from .audit import AuditLog
 from .matrix_bot import Bot
 from .memory import Memory, MemoryAccessError
 from .money import Money
+from .payments import Payments
 from .sysinfo import update_notice
 
 BRIEF_PROMPT = """\
@@ -52,6 +53,16 @@ async def brief_loop(
         except Exception as error:  # noqa: BLE001 - the loop must not stop
             audit.write("brief.error", error=repr(error))
         await asyncio.sleep(60)
+
+
+async def payments_loop(payments: Payments, audit: AuditLog, every: timedelta = timedelta(minutes=5)) -> None:
+    """Watch the Wise transfers that wait for the approval of Coops in the Wise app."""
+    while True:
+        await asyncio.sleep(every.total_seconds())
+        try:
+            await payments.watch_once()
+        except Exception as error:  # noqa: BLE001 - the loop must not stop
+            audit.write("payments.watch_error", error=repr(error))
 
 
 async def sync_loop(memory: Memory, audit: AuditLog, every: timedelta = timedelta(minutes=5)) -> None:

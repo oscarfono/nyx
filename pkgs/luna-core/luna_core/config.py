@@ -38,6 +38,8 @@ class Config:
     telegram_token: str | None
     telegram_chat_id: str | None
     money_enabled: bool = False
+    wise_json: str = '{"mode": "off"}'
+    wise_token: str | None = None
 
     @property
     def inbox_dir(self) -> Path:
@@ -72,4 +74,6 @@ def load() -> Config:
         telegram_token=_credential("telegram_token"),
         telegram_chat_id=_credential("telegram_chat_id"),
         money_enabled=env("LUNA_MONEY", "0") == "1",
+        wise_json=env("LUNA_WISE", '{"mode": "off"}'),
+        wise_token=_credential("wise_api_token"),
     )

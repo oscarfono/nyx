@@ -9,6 +9,9 @@ let
       "anthropic_api_key:${secret "anthropic-api-key"}"
       "matrix_password:${secret "luna-matrix-password"}"
     ]
+    ++ lib.optionals (lib.elem site.wise.mode [ "draft" "auto" ]) [
+      "wise_api_token:${secret "wise-api-token"}"
+    ]
     ++ lib.optionals site.telegram [
       "telegram_token:${secret "telegram-bot-token"}"
       "telegram_chat_id:${secret "telegram-chat-id"}"
@@ -100,6 +103,8 @@ in
   sops.secrets = {
     anthropic-api-key = { };
     luna-matrix-password = { };
+  } // lib.optionalAttrs (lib.elem site.wise.mode [ "draft" "auto" ]) {
+    wise-api-token = { };
   } // lib.optionalAttrs site.telegram {
     telegram-bot-token = { };
     telegram-chat-id = { };
@@ -138,6 +143,7 @@ in
       LUNA_MODEL = "claude-opus-5-5";
       LUNA_EFFORT = "medium";
       LUNA_MONEY = if site.money then "1" else "0";
+      LUNA_WISE = builtins.toJSON site.wise;
       GIT_AUTHOR_NAME = "LUNA";
       GIT_AUTHOR_EMAIL = "luna@${fqdn}";
       GIT_COMMITTER_NAME = "LUNA";

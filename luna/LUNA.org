@@ -425,6 +425,7 @@ Write these keys in =secrets/luna.yaml= with =make secrets=.
 | coops-password             | The output of =mkpasswd -m yescrypt=                     |
 | matrix-registration-secret | A random string: =openssl rand -hex 32=                  |
 | luna-matrix-password       | A random string: =openssl rand -hex 32=                  |
+| wise-api-token             | Optional. Only if =wise.mode= is =draft= or =auto=      |
 | telegram-bot-token         | Optional. Only if =telegram = true=                      |
 | telegram-chat-id           | Optional. Only if =telegram = true=                      |
 
@@ -475,6 +476,21 @@ Edit these values before the first install.
   # CAUTION: keep false until the gate test in "The gate for phase 2" passes.
   # true gives the agent the money tools and starts the Monday money post.
   money = false;
+
+  # The Wise float. Refer to "Build: the Wise float" in LUNA.org.
+  # WARNING: a payment cannot be undone. Keep mode = "dry-run" until the
+  # approval flow works for some weeks. Modes: off, dry-run, draft, auto.
+  # draft and auto need the secret wise-api-token. auto needs Wise Business.
+  wise = {
+    mode = "off";
+    sandbox = true;          # api.wise-sandbox.com. Set false for real money.
+    profileType = "personal";
+    maxPerPayment = 100;     # in the payee currency
+    maxPerDay = 200;
+    # One entry for each payee. LUNA can pay these payees only.
+    # landlord = { recipientId = 12345678; currency = "AUD"; maxPerPayment = 80; };
+    payees = { };
+  };
 }
 #+end_src
 
@@ -877,6 +893,9 @@ let
       "anthropic_api_key:${secret "anthropic-api-key"}"
       "matrix_password:${secret "luna-matrix-password"}"
     ]
+    ++ lib.optionals (lib.elem site.wise.mode [ "draft" "auto" ]) [
+      "wise_api_token:${secret "wise-api-token"}"
+    ]
     ++ lib.optionals site.telegram [
       "telegram_token:${secret "telegram-bot-token"}"
       "telegram_chat_id:${secret "telegram-chat-id"}"
@@ -968,6 +987,8 @@ in
   sops.secrets = {
     anthropic-api-key = { };
     luna-matrix-password = { };
+  } // lib.optionalAttrs (lib.elem site.wise.mode [ "draft" "auto" ]) {
+    wise-api-token = { };
   } // lib.optionalAttrs site.telegram {
     telegram-bot-token = { };
     telegram-chat-id = { };
@@ -1006,6 +1027,7 @@ in
       LUNA_MODEL = "claude-opus-5-5";
       LUNA_EFFORT = "medium";
       LUNA_MONEY = if site.money then "1" else "0";
+      LUNA_WISE = builtins.toJSON site.wise;
       GIT_AUTHOR_NAME = "LUNA";
       GIT_AUTHOR_EMAIL = "luna@${fqdn}";
       GIT_COMMITTER_NAME = "LUNA";
@@ -1153,6 +1175,8 @@ class Config:
     telegram_token: str | None
     telegram_chat_id: str | None
     money_enabled: bool = False
+    wise_json: str = '{"mode": "off"}'
+    wise_token: str | None = None
 
     @property
     def inbox_dir(self) -> Path:
@@ -1187,6 +1211,8 @@ def load() -> Config:
         telegram_token=_credential("telegram_token"),
         telegram_chat_id=_credential("telegram_chat_id"),
         money_enabled=env("LUNA_MONEY", "0") == "1",
+        wise_json=env("LUNA_WISE", '{"mode": "off"}'),
+        wise_token=_credential("wise_api_token"),
     )
 #+end_src
 
@@ -2035,7 +2061,8 @@ class Bot:
 
 ** Scheduler
 
-The scheduler runs two jobs:
+The scheduler runs these jobs:
+- In =draft= mode, a check of the Wise transfers each 5 minutes.
 - The morning brief, each day at the brief time.
   On Monday, with =money = true=, the brief adds the money summary.
 - A memory sync, each five minutes.
@@ -2056,6 +2083,7 @@ from .audit import AuditLog
 from .matrix_bot import Bot
 from .memory import Memory, MemoryAccessError
 from .money import Money
+from .payments import Payments
 from .sysinfo import update_notice
 
 BRIEF_PROMPT = """\
@@ -2097,6 +2125,16 @@ async def brief_loop(
         except Exception as error:  # noqa: BLE001 - the loop must not stop
             audit.write("brief.error", error=repr(error))
         await asyncio.sleep(60)
+
+
+async def payments_loop(payments: Payments, audit: AuditLog, every: timedelta = timedelta(minutes=5)) -> None:
+    """Watch the Wise transfers that wait for the approval of Coops in the Wise app."""
+    while True:
+        await asyncio.sleep(every.total_seconds())
+        try:
+            await payments.watch_once()
+        except Exception as error:  # noqa: BLE001 - the loop must not stop
+            audit.write("payments.watch_error", error=repr(error))
 
 
 async def sync_loop(memory: Memory, audit: AuditLog, every: timedelta = timedelta(minutes=5)) -> None:
@@ -2173,7 +2211,9 @@ from .matrix_bot import Bot
 from .memory import Memory
 from .money import Money
 from .money_tools import build_money_tools
-from .scheduler import brief_loop, sync_loop
+from .payment_tools import build_payment_tools
+from .payments import PaymentLog, Payments, WiseClient, WiseSettings
+from .scheduler import brief_loop, payments_loop, sync_loop
 from .telegram import Nudger
 from .tools import build_tools
 
@@ -2186,12 +2226,22 @@ async def run() -> None:
     nudger = Nudger(config.telegram_token, config.telegram_chat_id, audit)
 
     money: Money | None = None
+    payment_tools: list = []
+    wise = WiseSettings.from_json(config.wise_json)
+    if wise.mode != "off":
+        zone_p = ZoneInfo(config.owner_timezone)
+        client = WiseClient(config.wise_token, wise.sandbox) if config.wise_token else None
+        payments = Payments(wise, PaymentLog(config.state_dir / "payments.jsonl"), audit, client,
+                            lambda: datetime.now(zone_p).date())
+        payment_tools = build_payment_tools(payments, approvals, audit)
+        audit.write("payments.ready", mode=wise.mode, sandbox=wise.sandbox, payees=sorted(wise.payees))
 
     def make_agent() -> Agent:
         agent = Agent(config, [], audit)
         agent.tools = build_tools(memory, audit, agent.now, agent.taint)
         if money is not None:
             agent.tools += build_money_tools(money, audit, agent.taint)
+        agent.tools += payment_tools
         return agent
 
     if config.money_enabled:
@@ -2199,12 +2249,17 @@ async def run() -> None:
         money = Money(memory, config.inbox_dir, audit, lambda: datetime.now(zone).date())
     chat_agent = make_agent()
     bot = Bot(config, chat_agent, approvals, nudger, audit)
+    watchers = []
+    if wise.mode == "draft":
+        payments.notify = bot.send_owner
+        watchers.append(payments_loop(payments, audit))
     hour, minute = (int(part) for part in config.brief_time.split(":"))
     audit.write("luna.start", model=config.model)
     await asyncio.gather(
         bot.run(),
         brief_loop(make_agent, bot, audit, time(hour, minute), money),
         sync_loop(memory, audit),
+        *watchers,
     )
 
 
@@ -3345,6 +3400,567 @@ def test_add_rule_applies_to_next_import(money):
     upload(money, ["commbank--personal.csv"])
     money.import_inbox()
     assert "expenses:subscriptions  AUD 9.99" in journal(money)
+#+end_src
+
+* Build: the Wise float
+
+#+begin_quote
+*WARNING:* A payment cannot be undone. Keep =mode = "dry-run"= until the approval flow works for some weeks.
+Keep only a small amount in the Wise float. The float balance is the most that LUNA can lose.
+#+end_quote
+
+The Wise float is a Wise balance that only LUNA uses.
+Coops puts money into the float by hand.
+LUNA can request a payment from the float to a payee on the allowlist.
+
+** Modes
+
+| Mode      | Where Coops approves | Wise API calls              | Who sends the money                |
+|-----------+----------------------+-----------------------------+------------------------------------|
+| =off=     | -                    | none                        | Nobody. LUNA has no payment tool.  |
+| =dry-run= | -                    | none                        | Nobody. LUNA records the request.  |
+| =draft=   | The Wise app         | quote, transfer, status, cancel | Coops, in the Wise app         |
+| =auto=    | Matrix (=approve <id>=) | quote, transfer, fund    | LUNA                               |
+
+*The Wise app is the approval in =draft= mode.*
+A Wise personal token cannot fund a transfer through the API.
+LUNA makes the transfer, and no money moves.
+LUNA tells Coops in Matrix to open the Wise app.
+- To approve, fund the transfer in the Wise app. The app asks for its own authentication.
+- To deny, cancel the transfer in the app, or do nothing.
+  LUNA cancels a transfer that is not funded after 24 hours.
+LUNA checks the status of each transfer every 5 minutes and reports the result.
+
+The Wise app shows the payee and the amount from Wise.
+A Matrix message is text from LUNA. The Wise screen is not.
+Thus the Wise app is a stronger approval than a Matrix reply.
+
+Wise Business has "payment approvals" with Approve and Reject in the app.
+Wise does not allow those approval rules with a transfer from the API.
+=auto= mode needs Wise Business, and keeps the approval in Matrix.
+
+** Controls
+
+1. Each payment needs an approval by Coops: funding in the Wise app (=draft=), or =approve <id>= in Matrix (=auto=).
+2. The payee must be on the allowlist in the site values.
+   LUNA cannot add a payee. A new payee needs a change to nyx and a deploy.
+3. The currency must be the currency of the payee.
+4. The amount must not be more than the limit of the payee or the limit per payment.
+5. The total for the day must not be more than the limit per day.
+6. In =auto= mode, LUNA checks the limits again when Coops approves.
+   The day total counts transfers that wait for funding.
+7. Each Wise transfer has an idempotency key from the approval ID. A retry cannot pay two times.
+8. LUNA writes each payment to =/var/lib/luna/payments.jsonl= and to the audit log.
+
+** Add a payee
+
+1. In the Wise app, add the recipient. Make sure that the details are correct.
+2. Find the recipient ID. In sandbox or live, =GET /v1/accounts?profile=<id>= lists the recipients.
+3. Add the payee to =wise.payees= in the site values, with a limit.
+4. Deploy.
+
+** Payments module
+
+#+begin_src python :tangle ../pkgs/luna-core/luna_core/payments.py
+"""Wise float payments: limits, the payee allowlist, the Wise client, and the executor."""
+
+from __future__ import annotations
+
+import json
+import re
+import uuid
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
+from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal, InvalidOperation
+from pathlib import Path
+from typing import Any
+
+import httpx
+
+from .audit import AuditLog
+
+MODES = ("off", "dry-run", "draft", "auto")
+DRAFT_TTL = timedelta(hours=24)
+# Statuses that do not count toward the day total.
+CLOSED = frozenset({"failed", "cancelled", "expired"})
+# Wise statuses after funding. Refer to the Wise transfer status list.
+FUNDED = frozenset({"processing", "funds_converted", "outgoing_payment_sent"})
+_REFERENCE = re.compile(r"[^A-Za-z0-9 ]")
+
+
+class PaymentError(Exception):
+    """The payment is not permitted, or Wise refused the payment."""
+
+
+@dataclass(frozen=True)
+class Payee:
+    name: str
+    recipient_id: int
+    currency: str
+    max_per_payment: Decimal
+
+
+@dataclass(frozen=True)
+class WiseSettings:
+    mode: str
+    sandbox: bool
+    profile_type: str
+    max_per_payment: Decimal
+    max_per_day: Decimal
+    payees: dict[str, Payee]
+
+    @classmethod
+    def from_json(cls, text: str) -> WiseSettings:
+        data = json.loads(text)
+        mode = data.get("mode", "off")
+        if mode not in MODES:
+            raise PaymentError(f"The Wise mode {mode!r} is not one of {', '.join(MODES)}.")
+        payees = {
+            name: Payee(name, int(p["recipientId"]), p["currency"].upper(), Decimal(str(p["maxPerPayment"])))
+            for name, p in data.get("payees", {}).items()
+        }
+        return cls(
+            mode=mode,
+            sandbox=bool(data.get("sandbox", True)),
+            profile_type=data.get("profileType", "personal").lower(),
+            max_per_payment=Decimal(str(data.get("maxPerPayment", 100))),
+            max_per_day=Decimal(str(data.get("maxPerDay", 200))),
+            payees=payees,
+        )
+
+
+def clean_reference(text: str) -> str:
+    """Wise accepts a short reference. Keep letters, digits and spaces."""
+    return _REFERENCE.sub("", text).strip()[:18].strip() or "LUNA"
+
+
+def now_utc() -> datetime:
+    return datetime.now(UTC)
+
+
+class PaymentLog:
+    """The append-only record of payments. The last record of a payment is its state."""
+
+    def __init__(self, path: Path) -> None:
+        self.path = path
+
+    def latest(self) -> dict[str, dict[str, Any]]:
+        if not self.path.exists():
+            return {}
+        state: dict[str, dict[str, Any]] = {}
+        for line in self.path.read_text(encoding="utf-8").splitlines():
+            record = json.loads(line)
+            previous = state.get(record["id"], {})
+            # Keep the time of the first record: the 24-hour limit counts from the request.
+            state[record["id"]] = {**previous, **record, "time": previous.get("time", record.get("time"))}
+        return state
+
+    def total_for(self, day: date, currency: str) -> Decimal:
+        total = Decimal(0)
+        for record in self.latest().values():
+            if record["day"] == day.isoformat() and record["currency"] == currency and record["status"] not in CLOSED:
+                total += Decimal(record["amount"])
+        return total
+
+    def write(self, **record: Any) -> None:
+        record.setdefault("time", now_utc().isoformat())
+        with self.path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(record, default=str, sort_keys=True) + "\n")
+
+
+def check(settings: WiseSettings, log: PaymentLog, payee: str, amount_text: str, currency: str, day: date) -> tuple[Payee, Decimal]:
+    """Apply every control. Return the payee and the amount, or raise PaymentError."""
+    if settings.mode == "off":
+        raise PaymentError("Payments are off.")
+    if payee not in settings.payees:
+        raise PaymentError(f"{payee!r} is not on the allowlist. Allowed: {', '.join(settings.payees) or 'none'}.")
+    target = settings.payees[payee]
+    try:
+        amount = Decimal(amount_text).quantize(Decimal("0.01"))
+    except InvalidOperation as error:
+        raise PaymentError(f"{amount_text!r} is not an amount.") from error
+    if currency.upper() != target.currency:
+        raise PaymentError(f"{payee} takes {target.currency}, not {currency.upper()}.")
+    if amount <= 0:
+        raise PaymentError("The amount must be more than zero.")
+    limit = min(target.max_per_payment, settings.max_per_payment)
+    if amount > limit:
+        raise PaymentError(f"{target.currency} {amount} is more than the limit of {target.currency} {limit}.")
+    spent = log.total_for(day, target.currency)
+    if spent + amount > settings.max_per_day:
+        raise PaymentError(
+            f"The day total would be {target.currency} {spent + amount}. "
+            f"The limit per day is {target.currency} {settings.max_per_day}."
+        )
+    return target, amount
+
+
+class WiseClient:
+    """The few Wise API calls that the float uses."""
+
+    def __init__(self, token: str, sandbox: bool, transport: httpx.AsyncBaseTransport | None = None) -> None:
+        base = "https://api.wise-sandbox.com" if sandbox else "https://api.wise.com"
+        self.http = httpx.AsyncClient(
+            base_url=base, headers={"Authorization": f"Bearer {token}"}, timeout=30, transport=transport
+        )
+
+    async def _call(self, method: str, path: str, **kwargs: Any) -> Any:
+        response = await self.http.request(method, path, **kwargs)
+        if response.status_code >= 400:
+            raise PaymentError(f"Wise refused {method} {path}: HTTP {response.status_code} {response.text[:200]}")
+        return response.json()
+
+    async def profile_id(self, profile_type: str) -> int:
+        for profile in await self._call("GET", "/v1/profiles"):
+            if str(profile.get("type", "")).lower() == profile_type:
+                return int(profile["id"])
+        raise PaymentError(f"No {profile_type} profile on this Wise account.")
+
+    async def quote(self, profile: int, currency: str, amount: Decimal) -> str:
+        body = {"sourceCurrency": currency, "targetCurrency": currency, "targetAmount": float(amount)}
+        return str((await self._call("POST", f"/v3/profiles/{profile}/quotes", json=body))["id"])
+
+    async def transfer(self, recipient_id: int, quote_id: str, reference: str, key: str) -> dict[str, Any]:
+        body = {
+            "targetAccount": recipient_id,
+            "quoteUuid": quote_id,
+            "customerTransactionId": key,
+            "details": {"reference": reference},
+        }
+        return await self._call("POST", "/v1/transfers", json=body)
+
+    async def fund(self, profile: int, transfer_id: int) -> dict[str, Any]:
+        return await self._call("POST", f"/v3/profiles/{profile}/transfers/{transfer_id}/payments", json={"type": "BALANCE"})
+
+    async def status(self, transfer_id: int) -> str:
+        return str((await self._call("GET", f"/v1/transfers/{transfer_id}"))["status"])
+
+    async def cancel(self, transfer_id: int) -> None:
+        await self._call("PUT", f"/v1/transfers/{transfer_id}/cancel")
+
+
+Notify = Callable[[str], Awaitable[Any]]
+
+
+class Payments:
+    """Make payments within the controls, and watch the transfers that wait for Coops."""
+
+    def __init__(self, settings: WiseSettings, log: PaymentLog, audit: AuditLog,
+                 client: WiseClient | None, today: Callable[[], date],
+                 now: Callable[[], datetime] = now_utc) -> None:
+        self.settings = settings
+        self.log = log
+        self.audit = audit
+        self.client = client
+        self.today = today
+        self.now = now
+        self.notify: Notify | None = None
+
+    async def _tell(self, text: str) -> None:
+        if self.notify is not None:
+            await self.notify(text)
+
+    def summary(self, payee: str, amount: Decimal, currency: str, reference: str, reason: str) -> str:
+        return (f"Pay **{payee}** {currency} {amount}, reference \"{reference}\".\nReason: {reason}\n"
+                "Auto: after your approval, LUNA makes and funds the transfer.")
+
+    async def _send(self, params: dict[str, Any], fund: bool) -> dict[str, Any]:
+        if self.client is None:
+            raise PaymentError("No Wise token. Add wise-api-token to the secrets.")
+        target = self.settings.payees[params["payee"]]
+        profile = await self.client.profile_id(self.settings.profile_type)
+        quote = await self.client.quote(profile, target.currency, Decimal(params["amount"]))
+        transfer = await self.client.transfer(target.recipient_id, quote, params["reference"], params["key"])
+        if fund:
+            await self.client.fund(profile, int(transfer["id"]))
+        return transfer
+
+    async def request(self, payee: str, amount: str, currency: str, reference: str, key: str) -> str:
+        """The tool path for dry-run and draft modes. Draft: the Wise app is the approval."""
+        day = self.today()
+        target, value = check(self.settings, self.log, payee, amount, currency, day)
+        params = {"payee": target.name, "amount": str(value), "currency": target.currency,
+                  "reference": clean_reference(reference), "key": key}
+        record = dict(id=key, day=day.isoformat(), payee=target.name, amount=str(value),
+                      currency=target.currency, mode=self.settings.mode, time=self.now().isoformat())
+        if self.settings.mode == "dry-run":
+            self.log.write(**record, status="dry-run")
+            return (f"Dry run: LUNA would make a Wise transfer of {target.currency} {value} to {target.name}, "
+                    "for you to approve in the Wise app. LUNA sent nothing.")
+        try:
+            transfer = await self._send(params, fund=False)
+        except (PaymentError, httpx.HTTPError) as error:
+            self.log.write(**record, status="failed", error=str(error))
+            raise PaymentError(str(error)) from error
+        self.log.write(**record, status="draft", transfer_id=transfer.get("id"))
+        self.audit.write("payment.draft", payee=target.name, amount=str(value), transfer_id=transfer.get("id"))
+        text = (f"**Approve in the Wise app:** transfer {transfer.get('id')}, {target.currency} {value} "
+                f"to {target.name}. To deny, cancel it in the app or do nothing. "
+                "LUNA cancels it after 24 hours.")
+        await self._tell(text)
+        return text
+
+    async def execute(self, params: dict[str, Any]) -> str:
+        """The Matrix approval executor, for auto mode. Check the limits again first."""
+        day = self.today()
+        target, value = check(self.settings, self.log, params["payee"], params["amount"], params["currency"], day)
+        record = dict(id=params["key"], day=day.isoformat(), payee=target.name, amount=str(value),
+                      currency=target.currency, mode=self.settings.mode, time=self.now().isoformat())
+        try:
+            transfer = await self._send(params, fund=True)
+        except (PaymentError, httpx.HTTPError) as error:
+            self.log.write(**record, status="failed", error=str(error))
+            raise
+        self.log.write(**record, status="funded", transfer_id=transfer.get("id"))
+        self.audit.write("payment.funded", payee=target.name, amount=str(value), transfer_id=transfer.get("id"))
+        return f"Sent {target.currency} {value} to {target.name}. Wise transfer {transfer.get('id')}."
+
+    async def watch_once(self) -> None:
+        """Report funded drafts. Cancel drafts that wait for more than 24 hours."""
+        if self.client is None:
+            return
+        for key, record in self.log.latest().items():
+            if record.get("status") != "draft":
+                continue
+            transfer_id = int(record["transfer_id"])
+            status = await self.client.status(transfer_id)
+            label = f"{record['currency']} {record['amount']} to {record['payee']} (transfer {transfer_id})"
+            if status in FUNDED:
+                self.log.write(id=key, status="funded", wise_status=status)
+                self.audit.write("payment.funded", transfer_id=transfer_id)
+                await self._tell(f"You approved {label} in the Wise app. Wise is sending it.")
+            elif status == "cancelled":
+                self.log.write(id=key, status="cancelled")
+                await self._tell(f"You cancelled {label}.")
+            elif self.now() - datetime.fromisoformat(record["time"]) > DRAFT_TTL:
+                await self.client.cancel(transfer_id)
+                self.log.write(id=key, status="expired")
+                self.audit.write("payment.expired", transfer_id=transfer_id)
+                await self._tell(f"LUNA cancelled {label}. Nobody funded it in 24 hours.")
+
+
+def payment_key() -> str:
+    """The idempotency key for one payment. Wise uses it to refuse a second transfer."""
+    return str(uuid.uuid4())
+#+end_src
+
+** Payment tool
+
+The tool is tier 2. The money moves only after the approval by Coops.
+
+#+begin_src python :tangle ../pkgs/luna-core/luna_core/payment_tools.py
+"""The payment tool. In draft mode the Wise app is the approval; in auto mode, Matrix."""
+
+from __future__ import annotations
+
+from typing import Any
+
+from anthropic import beta_async_tool
+
+from .approvals import Approvals
+from .audit import AuditLog
+from .payments import PaymentError, Payments, check, clean_reference, payment_key
+
+
+def build_payment_tools(payments: Payments, approvals: Approvals, audit: AuditLog) -> list[Any]:
+    approvals.register("wise_transfer", payments.execute)
+
+    @beta_async_tool
+    async def payment_request(payee: str, amount: str, currency: str, reference: str, reason: str) -> str:
+        """Request a payment from the Wise float to a payee on the allowlist.
+
+        No money moves now. Coops approves in the Wise app (draft mode) or in Matrix (auto mode).
+
+        Args:
+            payee: The name of the payee on the allowlist.
+            amount: The amount, for example "45.00".
+            currency: The currency code of the payee, for example "AUD".
+            reference: The payment reference. Wise keeps 18 letters, digits and spaces.
+            reason: Why LUNA asks for this payment, in one sentence.
+        """
+        audit.write("tool", name="payment_request", payee=payee, amount=amount, currency=currency, reason=reason)
+        try:
+            if payments.settings.mode in ("dry-run", "draft"):
+                return await payments.request(payee, amount, currency, reference, payment_key())
+            target, value = check(payments.settings, payments.log, payee, amount, currency, payments.today())
+        except PaymentError as error:
+            return f"Refused: {error}"
+        ref = clean_reference(reference)
+        params = {"payee": target.name, "amount": str(value), "currency": target.currency,
+                  "reference": ref, "key": payment_key()}
+        item = await approvals.request("wise_transfer", params,
+                                       payments.summary(target.name, value, target.currency, ref, reason))
+        return f"Approval request {item.id} sent to Coops in Matrix."
+
+    return [payment_request]
+#+end_src
+
+** Payment tests
+
+The tests use a fake Wise server. They make no network call.
+
+#+begin_src python :tangle ../pkgs/luna-core/tests/test_payments.py
+import asyncio
+import json
+from datetime import UTC, date, datetime, timedelta
+
+import httpx
+import pytest
+
+from luna_core.approvals import Approvals
+from luna_core.audit import AuditLog
+from luna_core.payment_tools import build_payment_tools
+from luna_core.payments import PaymentError, PaymentLog, Payments, WiseClient, WiseSettings, check, clean_reference
+
+TODAY = date(2026, 11, 23)
+
+
+def settings(mode):
+    return WiseSettings.from_json(json.dumps({
+        "mode": mode, "sandbox": True, "maxPerPayment": 100, "maxPerDay": 150,
+        "payees": {"landlord": {"recipientId": 42, "currency": "AUD", "maxPerPayment": 80}},
+    }))
+
+
+class FakeWise:
+    def __init__(self):
+        self.calls = []
+        self.state = "incoming_payment_waiting"
+
+    def handler(self, request):
+        path = request.url.path
+        self.calls.append((request.method, path))
+        if path == "/v1/profiles":
+            return httpx.Response(200, json=[{"id": 7, "type": "PERSONAL"}])
+        if path.endswith("/quotes"):
+            return httpx.Response(200, json={"id": "q-1"})
+        if path == "/v1/transfers":
+            body = json.loads(request.content)
+            assert body["targetAccount"] == 42 and body["quoteUuid"] == "q-1"
+            return httpx.Response(200, json={"id": 555, "status": "incoming_payment_waiting"})
+        if path == "/v1/transfers/555" and request.method == "GET":
+            return httpx.Response(200, json={"id": 555, "status": self.state})
+        if path == "/v1/transfers/555/cancel":
+            self.state = "cancelled"
+            return httpx.Response(200, json={"id": 555, "status": "cancelled"})
+        if path.endswith("/payments"):
+            return httpx.Response(200, json={"status": "COMPLETED"})
+        return httpx.Response(404)
+
+
+class Clock:
+    def __init__(self):
+        self.value = datetime(2026, 11, 23, 9, 0, tzinfo=UTC)
+
+    def __call__(self):
+        return self.value
+
+
+def make(tmp_path, mode):
+    fake, clock, told = FakeWise(), Clock(), []
+    client = WiseClient("token", True, transport=httpx.MockTransport(fake.handler))
+    audit = AuditLog(tmp_path / "audit.jsonl")
+    payments = Payments(settings(mode), PaymentLog(tmp_path / "payments.jsonl"), audit, client, lambda: TODAY, clock)
+
+    async def notify(text):
+        told.append(text)
+
+    payments.notify = notify
+    return payments, fake, clock, told
+
+
+def run(coro):
+    return asyncio.run(coro)
+
+
+@pytest.mark.parametrize("payee, amount, currency, message", [
+    ("stranger", "10", "AUD", "not on the allowlist"),
+    ("landlord", "10", "NZD", "takes AUD"),
+    ("landlord", "0", "AUD", "more than zero"),
+    ("landlord", "90", "AUD", "limit of AUD 80"),
+    ("landlord", "abc", "AUD", "not an amount"),
+])
+def test_controls(tmp_path, payee, amount, currency, message):
+    payments, *_ = make(tmp_path, "draft")
+    with pytest.raises(PaymentError, match=message):
+        check(payments.settings, payments.log, payee, amount, currency, TODAY)
+
+
+def test_off_refuses(tmp_path):
+    payments, *_ = make(tmp_path, "off")
+    with pytest.raises(PaymentError, match="off"):
+        check(payments.settings, payments.log, "landlord", "10", "AUD", TODAY)
+
+
+def test_dry_run_calls_nothing(tmp_path):
+    payments, fake, *_ = make(tmp_path, "dry-run")
+    assert "Dry run" in run(payments.request("landlord", "50", "AUD", "Rent", "k-1"))
+    assert fake.calls == []
+
+
+def test_draft_makes_a_transfer_and_never_funds(tmp_path):
+    payments, fake, _, told = make(tmp_path, "draft")
+    text = run(payments.request("landlord", "50", "AUD", "Rent", "k-1"))
+    assert "Approve in the Wise app" in text and told == [text]
+    assert ("POST", "/v1/transfers") in fake.calls
+    assert not any(path.endswith("/payments") for _, path in fake.calls)
+
+
+def test_drafts_count_toward_the_day_limit(tmp_path):
+    payments, *_ = make(tmp_path, "draft")
+    run(payments.request("landlord", "80", "AUD", "Rent", "k-1"))
+    with pytest.raises(PaymentError, match="limit per day"):
+        check(payments.settings, payments.log, "landlord", "80", "AUD", TODAY)
+
+
+def test_watch_reports_funding(tmp_path):
+    payments, fake, _, told = make(tmp_path, "draft")
+    run(payments.request("landlord", "50", "AUD", "Rent", "k-1"))
+    fake.state = "processing"
+    run(payments.watch_once())
+    assert "You approved" in told[-1]
+    assert payments.log.latest()["k-1"]["status"] == "funded"
+    run(payments.watch_once())
+    assert len(told) == 2
+
+
+def test_watch_cancels_after_24_hours(tmp_path):
+    payments, fake, clock, told = make(tmp_path, "draft")
+    run(payments.request("landlord", "50", "AUD", "Rent", "k-1"))
+    clock.value += timedelta(hours=23)
+    run(payments.watch_once())
+    assert ("PUT", "/v1/transfers/555/cancel") not in fake.calls
+    clock.value += timedelta(hours=2)
+    run(payments.watch_once())
+    assert ("PUT", "/v1/transfers/555/cancel") in fake.calls
+    assert "Nobody funded it" in told[-1]
+    assert payments.log.total_for(TODAY, "AUD") == 0
+
+
+def test_watch_sees_a_cancel_in_the_app(tmp_path):
+    payments, fake, _, told = make(tmp_path, "draft")
+    run(payments.request("landlord", "50", "AUD", "Rent", "k-1"))
+    fake.state = "cancelled"
+    run(payments.watch_once())
+    assert "You cancelled" in told[-1]
+
+
+def test_auto_needs_a_matrix_approval(tmp_path):
+    payments, fake, *_ = make(tmp_path, "auto")
+    (tmp_path / "approvals").mkdir()
+    approvals = Approvals(tmp_path / "approvals", payments.audit)
+    tools = build_payment_tools(payments, approvals, payments.audit)
+    assert tools
+    item = run(approvals.request("wise_transfer", {"payee": "landlord", "amount": "50.00", "currency": "AUD",
+                                                   "reference": "Rent", "key": "k-1"}, "test"))
+    assert fake.calls == []
+    assert "Sent AUD 50.00" in run(approvals.approve(item.id))
+    assert ("POST", "/v3/profiles/7/transfers/555/payments") in fake.calls
+
+
+def test_reference_is_cleaned():
+    assert clean_reference("Rent; DROP TABLE <x> 2026-11") == "Rent DROP TABLE x"
 #+end_src
 
 * Memory seed files

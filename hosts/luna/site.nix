@@ -27,4 +27,19 @@
   # CAUTION: keep false until the gate test in "The gate for phase 2" passes.
   # true gives the agent the money tools and starts the Monday money post.
   money = false;
+
+  # The Wise float. Refer to "Build: the Wise float" in LUNA.org.
+  # WARNING: a payment cannot be undone. Keep mode = "dry-run" until the
+  # approval flow works for some weeks. Modes: off, dry-run, draft, auto.
+  # draft and auto need the secret wise-api-token. auto needs Wise Business.
+  wise = {
+    mode = "off";
+    sandbox = true;          # api.wise-sandbox.com. Set false for real money.
+    profileType = "personal";
+    maxPerPayment = 100;     # in the payee currency
+    maxPerDay = 200;
+    # One entry for each payee. LUNA can pay these payees only.
+    # landlord = { recipientId = 12345678; currency = "AUD"; maxPerPayment = 80; };
+    payees = { };
+  };
 }
