@@ -30,7 +30,8 @@ defmodule LunaWeb.MixProject do
       {:jason, "~> 1.4"},
       {:phoenix, "~> 1.8"},
       {:phoenix_html, "~> 4.4"},
-      {:phoenix_live_view, "~> 1.2"},
+      # 1.2.14 fixes EEF-CVE-2026-126334: a join without "url" skipped on_mount.
+      {:phoenix_live_view, "~> 1.2.14"},
       {:postgrex, "~> 0.22"},
       {:req, "~> 0.7"}
     ]

@@ -40,6 +40,11 @@ defmodule LunaWeb.WebTest do
     assert get_resp_header(conn, "cache-control") == ["no-store"]
   end
 
+  test "the mount itself refuses a session with no owner login" do
+    socket = %Phoenix.LiveView.Socket{}
+    assert {:ok, %{redirected: {:redirect, %{to: "/"}}}} = LunaWeb.HomeLive.mount(%{}, %{}, socket)
+  end
+
   test "the LiveView mount refuses a session with no owner login" do
     socket = %Phoenix.LiveView.Socket{}
     assert {:halt, _} = LunaWeb.Owner.on_mount(:owner, %{}, %{}, socket)

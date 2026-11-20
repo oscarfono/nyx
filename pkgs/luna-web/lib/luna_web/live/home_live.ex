@@ -13,7 +13,13 @@ defmodule LunaWeb.HomeLive do
   @refresh :timer.seconds(30)
 
   @impl true
-  def mount(_params, _session, socket) do
+  # on_mount checks the owner. mount checks again, because a LiveView bug
+  # (EEF-CVE-2026-126334) once let a join skip on_mount.
+  def mount(_params, session, socket) do
+    if LunaWeb.Owner.owner_session?(session), do: owner_mount(socket), else: {:ok, redirect(socket, to: "/")}
+  end
+
+  defp owner_mount(socket) do
     socket =
       assign(socket,
         panel: "chat",

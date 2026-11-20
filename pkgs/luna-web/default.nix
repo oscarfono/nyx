@@ -16,7 +16,7 @@ beamPackages.mixRelease {
   mixFodDeps = beamPackages.fetchMixDeps {
     pname = "${pname}-deps";
     inherit version src;
-    hash = "sha256-0JkMkk9EG3v6KxpgPOiNNX/LDkFNzQZP3sdw9oRkZq0=";
+    hash = "sha256-4/l12IHvIY9mUvgHOPBlrBy49wSfFYeWneE/KYeOg+Y=";
   };
 
   # The tests need a PostgreSQL server. The check starts one in the build

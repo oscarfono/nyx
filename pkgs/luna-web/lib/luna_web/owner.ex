@@ -50,6 +50,9 @@ defmodule LunaWeb.Owner do
     end
   end
 
+  @doc "True when the signed session has the owner login."
+  def owner_session?(session), do: Map.get(session, @session_key) == owner_login()
+
   # An empty owner login would accept an empty header. Refuse to start.
   defp owner_login do
     case Application.fetch_env!(:luna_web, :owner_login) do
