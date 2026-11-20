@@ -209,12 +209,15 @@
       #   luna-core  the agent, in Python
       #   luna-web   the web app, in Phoenix. Its tests use a PostgreSQL
       #              server in the build directory.
+      #   luna-core-ex  the core, in Elixir (stage E5). It replaces
+      #              luna-core at the cutover.
       packages.${system} = {
         luna-core = nixpkgs.legacyPackages.${system}.callPackage ./pkgs/luna-core { };
         luna-web = nixpkgs.legacyPackages.${system}.callPackage ./pkgs/luna-web { };
+        luna-core-ex = nixpkgs.legacyPackages.${system}.callPackage ./pkgs/luna-core-ex { };
       };
       checks.${system} = {
-        inherit (self.packages.${system}) luna-core luna-web;
+        inherit (self.packages.${system}) luna-core luna-web luna-core-ex;
       };
 
       formatter.${system} = nixpkgs.legacyPackages.${system}.nixpkgs-fmt;

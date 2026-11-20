@@ -27,6 +27,7 @@ The next tangle overwrites the tangled files.
 | =modules/luna/*.nix= | Hardening, access, Matrix, the agent |
 | =pkgs/luna-core/=    | The agent package and its tests      |
 | =pkgs/luna-web/=     | The Phoenix web app and its tests    |
+| =pkgs/luna-core-ex/= | The Elixir core and its tests (E5)   |
 | =luna/memory-seed/=  | The first memory files               |
 | =luna/tailscale/=    | The Tailscale policy                 |
 | =luna/tests/=        | The VM test of the web app           |
@@ -404,7 +405,7 @@ The Python core stays until the new core passes the same tests.
 | Voice in          | =services.wyoming.faster-whisper=, local on luna                    |
 | Voice out         | =services.wyoming.piper=, local on luna, a female voice             |
 | Packaging         | =mixRelease= with =fetchMixDeps= in the nyx flake                   |
-| Core language     | Not decided: Elixir (Req over HTTP) or Go (official Anthropic SDK)  |
+| Core language     | Elixir, with Req for HTTP. Coops decided on 2026-11-20.            |
 | Money ledger      | Stays hledger plain text in the memory, for Emacs                   |
 | Clients           | The laptop and the iPhone now. An iPhone app and a watch app later. |
 | Wake word         | "LUNA". Refer to [[*Wake word][Wake word]].                                    |
@@ -647,7 +648,8 @@ Edit these values before the first install.
   # sttModel: base-int8 is faster, small-int8 is more accurate. Measure on luna.
   # ttsVoice: a Piper voice name. lengthScale above 1.0 speaks slower.
   voice = {
-    sttModel = "small-int8";
+    # base-int8: 1.85 s for 2.7 s of speech on luna. small-int8: 4.4 s.
+    sttModel = "base-int8";
     ttsVoice = "en_GB-cori-high";
     lengthScale = 1.0;
   };
@@ -697,9 +699,10 @@ The packages and the checks:
 packages.${system} = {
   luna-core = nixpkgs.legacyPackages.${system}.callPackage ./pkgs/luna-core { };
   luna-web = nixpkgs.legacyPackages.${system}.callPackage ./pkgs/luna-web { };
+  luna-core-ex = nixpkgs.legacyPackages.${system}.callPackage ./pkgs/luna-core-ex { };
 };
 checks.${system} = {
-  inherit (self.packages.${system}) luna-core luna-web;
+  inherit (self.packages.${system}) luna-core luna-web luna-core-ex;
 };
 #+end_src
 
@@ -4514,6 +4517,829 @@ def test_serve_on_a_unix_socket(tmp_path):
     assert stat.S_ISSOCK(path.stat().st_mode)
 #+end_src
 
+* Build: the Elixir core
+
+This section is stage E5 of [[*LUNA on Elixir][LUNA on Elixir]].
+The Elixir core =luna_core= replaces the Python core in =pkgs/luna-core=.
+It is a separate release, and it runs as the user =luna=, as the Python core does.
+It serves the same [[*Build: the core API][core API]] on the same socket, so the Phoenix app does not change.
+
+The port goes module by module. The tests of each module come first.
+The Python core stays in service until the cutover.
+At the cutover, all ported tests pass, and the Python core retires.
+
+** Port progress
+
+| Step | Modules                                   | Python tests            | Elixir tests | State   |
+|------+-------------------------------------------+-------------------------+--------------+---------|
+| 1    | Config, Audit, Approvals, Privacy, Sysinfo | approvals, privacy, sysinfo | 32       | Done    |
+| 2    | Memory                                    | memory                  | 10           | Done    |
+| 3    | The core API server                       | web                     |              | Next    |
+| 4    | Agent and tools                           | (none)                  |              |         |
+| 5    | Matrix bot                                |                         |              |         |
+| 6    | Scheduler and Telegram                    | scheduler               |              |         |
+| 7    | Money and the Wise float                  | money, payments         |              |         |
+| 8    | GEV and REA tools (new)                   |                         |              |         |
+
+** Changes from the Python core
+
+- =Approvals= is a GenServer. It takes a request from disk before the executor runs.
+  Thus two approvals of one request run the executor once. A test makes sure of this.
+- =Memory= is a GenServer. It runs one git operation at a time.
+  The chat and the morning brief can run at the same time, so this matters.
+- =Memory.resolve/2= refuses a path through a symlink.
+  The Python core followed a symlink and then checked the result.
+- The time in an audit line ends in =Z= in place of =+00:00=. The two forms give the same time.
+
+** Package
+
+The check compiles the dependencies for the test environment before the tests.
+=mixRelease= compiles them for =prod= only.
+The tests of =Memory= set =GIT_CONFIG_GLOBAL= to =/dev/null=, so the git configuration of the user (for example commit signing) cannot change a test.
+
+#+begin_src nix :tangle ../pkgs/luna-core-ex/default.nix
+{ lib, beamPackages, git }:
+
+let
+  pname = "luna-core-ex";
+  version = "0.1.0";
+  src = lib.fileset.toSource {
+    root = ./.;
+    fileset = lib.fileset.unions [ ./mix.exs ./mix.lock ./config ./lib ./test ];
+  };
+in
+beamPackages.mixRelease {
+  inherit pname version src;
+
+  # Change the hash after each change to mix.lock. Refer to "Dependencies"
+  # in luna/LUNA.org.
+  mixFodDeps = beamPackages.fetchMixDeps {
+    pname = "${pname}-deps";
+    inherit version src;
+    hash = "sha256-BuFdPg5s/GWG8/S37rJLd/f1a+AGTB9lSwWDy2WHyFQ=";
+  };
+
+  doCheck = true;
+  nativeCheckInputs = [ git ];
+  checkPhase = ''
+    runHook preCheck
+    # The deps are compiled for prod only. Compile them for test from the
+    # sources in deps/. This step needs no network.
+    MIX_ENV=test mix deps.compile
+    MIX_ENV=test mix test --no-deps-check
+    runHook postCheck
+  '';
+
+  meta = {
+    description = "The LUNA core, in Elixir. It replaces pkgs/luna-core at the cutover.";
+    mainProgram = "luna_core";
+  };
+}
+#+end_src
+
+#+begin_src conf :tangle ../pkgs/luna-core-ex/.gitignore
+/_build/
+/deps/
+# ExUnit tmp_dir
+/tmp/
+#+end_src
+
+#+begin_src elixir :tangle ../pkgs/luna-core-ex/mix.exs
+defmodule LunaCore.MixProject do
+  use Mix.Project
+
+  def project do
+    [
+      app: :luna_core,
+      version: "0.1.0",
+      elixir: "~> 1.18",
+      start_permanent: Mix.env() == :prod,
+      deps: deps(),
+      releases: [luna_core: [include_executables_for: [:unix]]]
+    ]
+  end
+
+  def application do
+    [mod: {LunaCore.Application, []}, extra_applications: [:logger, :crypto]]
+  end
+
+  # No dependency is for one environment only, so one fetchMixDeps hash
+  # serves the release and the tests.
+  defp deps do
+    [
+      {:bandit, "~> 1.15"},
+      {:jason, "~> 1.4"},
+      {:plug, "~> 1.18"},
+      {:req, "~> 0.7"}
+    ]
+  end
+end
+#+end_src
+
+#+begin_src elixir :tangle ../pkgs/luna-core-ex/config/config.exs
+import Config
+
+config :logger, :default_formatter, format: "[$level] $message\n"
+
+# The tests start no service. Each test starts the parts that it needs.
+config :luna_core, start_services: config_env() != :test
+
+if config_env() == :test do
+  config :logger, level: :warning
+end
+#+end_src
+
+** Application
+
+The application starts no service yet. Each port step adds its services.
+
+#+begin_src elixir :tangle ../pkgs/luna-core-ex/lib/luna_core/application.ex
+defmodule LunaCore.Application do
+  @moduledoc "Starts the LUNA core. The services come in the later port steps."
+  use Application
+
+  @impl true
+  def start(_type, _args) do
+    Supervisor.start_link([], strategy: :one_for_one, name: LunaCore.Supervisor)
+  end
+end
+#+end_src
+
+** Audit log
+
+#+begin_src elixir :tangle ../pkgs/luna-core-ex/lib/luna_core/audit.ex
+defmodule LunaCore.Audit do
+  @moduledoc """
+  Writes one JSON line for each event to the append-only audit log.
+  The file has the attribute +a, so the core can only add lines.
+  """
+
+  @doc "Writes one event. The keys are in sorted order, as in the Python core."
+  def write(path, event, fields \\ %{}) when is_binary(event) do
+    record =
+      fields
+      |> Map.new(fn {k, v} -> {to_string(k), json_safe(v)} end)
+      |> Map.merge(%{"time" => DateTime.utc_now() |> DateTime.to_iso8601(), "event" => event})
+      |> Enum.sort()
+      |> Jason.OrderedObject.new()
+
+    line = Jason.encode!(record) <> "\n"
+    {:ok, file} = File.open(path, [:append, :binary])
+
+    try do
+      :ok = IO.binwrite(file, line)
+      :ok = :file.datasync(file)
+    after
+      File.close(file)
+    end
+  end
+
+  # The Python core wrote str() of a value that JSON cannot hold.
+  defp json_safe(v) when is_binary(v) or is_number(v) or is_boolean(v) or is_nil(v), do: v
+  defp json_safe(v) when is_atom(v), do: Atom.to_string(v)
+  defp json_safe(v) when is_list(v), do: Enum.map(v, &json_safe/1)
+  defp json_safe(%{__struct__: _} = v), do: inspect(v)
+  defp json_safe(v) when is_map(v), do: Map.new(v, fn {k, x} -> {to_string(k), json_safe(x)} end)
+  defp json_safe(v), do: inspect(v)
+end
+#+end_src
+
+** Approvals
+
+#+begin_src elixir :tangle ../pkgs/luna-core-ex/lib/luna_core/approvals.ex
+defmodule LunaCore.Approvals do
+  @moduledoc """
+  Holds tier 2 actions until the owner approves them.
+
+  A tier 2 tool calls request/4. The request goes to disk.
+  Only the bot and the core API call approve/2 or deny/2, when the owner acts.
+  The model has no path to approve/2 or deny/2.
+
+  The GenServer takes each request from disk before its executor runs.
+  Thus two approvals of one request cannot run the executor twice.
+  """
+  use GenServer
+
+  @ttl_seconds 24 * 60 * 60
+
+  defmodule Request do
+    @moduledoc false
+    defstruct [:id, :action, :params, :summary, :created]
+  end
+
+  def start_link(opts), do: GenServer.start_link(__MODULE__, opts, name: Keyword.get(opts, :name, __MODULE__))
+
+  @doc "Registers the executor of an action. The executor takes the params and returns text."
+  def register(server \\ __MODULE__, action, executor) when is_function(executor, 1),
+    do: GenServer.call(server, {:register, action, executor})
+
+  @doc "Adds a function that gets each new request, for example to send a Matrix message."
+  def notify(server \\ __MODULE__, fun) when is_function(fun, 1), do: GenServer.call(server, {:notify, fun})
+
+  def request(server \\ __MODULE__, action, params, summary) do
+    case GenServer.call(server, {:request, action, params, summary}) do
+      {:ok, item, notifiers} ->
+        Enum.each(notifiers, & &1.(item))
+        {:ok, item}
+
+      error ->
+        error
+    end
+  end
+
+  def get(server \\ __MODULE__, id), do: GenServer.call(server, {:get, id})
+  def pending(server \\ __MODULE__), do: GenServer.call(server, :pending)
+
+  @doc "Approves a request and runs its executor in the process of the caller."
+  def approve(server \\ __MODULE__, id) do
+    case GenServer.call(server, {:take, id}) do
+      {:error, :none} ->
+        "There is no request #{id}."
+
+      {:ok, item, executor, audit} ->
+        if expired?(item) do
+          LunaCore.Audit.write(audit, "approval.expired", %{id: item.id, action: item.action})
+          "The request #{item.id} expired. Ask LUNA again."
+        else
+          LunaCore.Audit.write(audit, "approval.approved", %{id: item.id, action: item.action})
+          run(executor, item, audit)
+        end
+    end
+  end
+
+  def deny(server \\ __MODULE__, id) do
+    case GenServer.call(server, {:take, id}) do
+      {:error, :none} ->
+        "There is no request #{id}."
+
+      {:ok, item, _executor, audit} ->
+        LunaCore.Audit.write(audit, "approval.denied", %{id: item.id, action: item.action})
+        "Denied: #{item.summary}"
+    end
+  end
+
+  # The owner must see each failure.
+  defp run(executor, item, audit) do
+    result = executor.(item.params)
+    LunaCore.Audit.write(audit, "approval.done", %{id: item.id, action: item.action, result: result})
+    result
+  rescue
+    error ->
+      LunaCore.Audit.write(audit, "approval.failed", %{id: item.id, action: item.action, error: inspect(error)})
+      "The action #{item.action} failed: #{Exception.message(error)}"
+  end
+
+  defp expired?(item) do
+    {:ok, created, _} = DateTime.from_iso8601(item.created)
+    DateTime.diff(DateTime.utc_now(), created) > @ttl_seconds
+  end
+
+  @impl true
+  def init(opts) do
+    {:ok, %{dir: Keyword.fetch!(opts, :dir), audit: Keyword.fetch!(opts, :audit), executors: %{}, notifiers: []}}
+  end
+
+  @impl true
+  def handle_call({:register, action, executor}, _from, state),
+    do: {:reply, :ok, put_in(state.executors[action], executor)}
+
+  def handle_call({:notify, fun}, _from, state), do: {:reply, :ok, %{state | notifiers: state.notifiers ++ [fun]}}
+
+  def handle_call({:request, action, params, summary}, _from, state) do
+    if Map.has_key?(state.executors, action) do
+      item = %Request{
+        id: :crypto.strong_rand_bytes(3) |> Base.encode16(case: :lower),
+        action: action,
+        params: params,
+        summary: summary,
+        created: DateTime.utc_now() |> DateTime.to_iso8601()
+      }
+
+      File.write!(path(state, item.id), item |> Map.from_struct() |> Jason.encode!())
+      LunaCore.Audit.write(state.audit, "approval.requested", %{id: item.id, action: action, params: params})
+      {:reply, {:ok, item, state.notifiers}, state}
+    else
+      {:reply, {:error, "No executor for the action #{action}."}, state}
+    end
+  end
+
+  def handle_call({:get, id}, _from, state), do: {:reply, read(state, id), state}
+
+  def handle_call(:pending, _from, state) do
+    items =
+      Path.wildcard(Path.join(state.dir, "*.json"))
+      |> Enum.map(&decode(File.read!(&1)))
+      |> Enum.sort_by(& &1.created)
+
+    {:reply, items, state}
+  end
+
+  def handle_call({:take, id}, _from, state) do
+    case read(state, id) do
+      nil ->
+        {:reply, {:error, :none}, state}
+
+      item ->
+        File.rm!(path(state, item.id))
+        {:reply, {:ok, item, Map.get(state.executors, item.action), state.audit}, state}
+    end
+  end
+
+  defp read(state, id) do
+    with true <- valid_id?(id),
+         {:ok, text} <- File.read(path(state, id)) do
+      decode(text)
+    else
+      _ -> nil
+    end
+  end
+
+  defp valid_id?(id), do: is_binary(id) and Regex.match?(~r/\A[[:alnum:]]+\z/, id)
+  defp path(state, id), do: Path.join(state.dir, id <> ".json")
+
+  defp decode(text) do
+    map = Jason.decode!(text)
+    %Request{id: map["id"], action: map["action"], params: map["params"], summary: map["summary"], created: map["created"]}
+  end
+end
+#+end_src
+
+** Privacy
+
+#+begin_src elixir :tangle ../pkgs/luna-core-ex/lib/luna_core/privacy.ex
+defmodule LunaCore.Privacy do
+  @moduledoc """
+  Classifies memory paths, and masks account numbers.
+
+  The taint of a conversation is a value in the agent: nil (clean) or the
+  reason. A conversation that read money data cannot use the outbound tools,
+  and can write money paths only.
+  """
+
+  @sensitive_files ["money.org"]
+  @sensitive_dirs ["money/", "briefs/"]
+
+  # Tools that send data out of LUNA. A tainted conversation cannot use them.
+  @outbound_tools ["web_search", "web_fetch"]
+
+  def outbound_tools, do: @outbound_tools
+
+  def sensitive?(path) do
+    clean = path |> Path.expand("/") |> String.trim_leading("/")
+    clean in @sensitive_files or String.starts_with?(clean, @sensitive_dirs)
+  end
+
+  @doc "Returns the refusal text when a tainted conversation writes a clean path."
+  def write_refusal(nil, _path), do: nil
+
+  def write_refusal(_taint, path) do
+    if sensitive?(path) do
+      nil
+    else
+      "Error: this conversation read money data. LUNA can write to " <>
+        "money.org, money/ or briefs/ only. Start a new conversation with /new."
+    end
+  end
+
+  # A run of digits with single spaces or dashes between groups. A letter can
+  # touch the run, and the mask still applies. A decimal point or a comma next
+  # to the run means an amount, so the mask skips it.
+  @digit_run ~r/(?<![\d.,])\d(?:[ -]?\d)*(?!\d|[.,]\d)/
+
+  @doc "Masks account and card numbers. Keeps the last four digits. Use it on description text only."
+  def mask_numbers(text, min_digits \\ 6) do
+    Regex.replace(@digit_run, text, fn run ->
+      digits = String.replace(run, ~r/\D/, "")
+
+      if String.length(digits) < min_digits,
+        do: run,
+        else: String.duplicate("*", String.length(digits) - 4) <> String.slice(digits, -4, 4)
+    end)
+  end
+end
+#+end_src
+
+** System age
+
+#+begin_src elixir :tangle ../pkgs/luna-core-ex/lib/luna_core/sysinfo.ex
+defmodule LunaCore.Sysinfo do
+  @moduledoc "Tells the owner when the nixpkgs on luna is old."
+
+  @version_file "/run/current-system/nixos-version"
+  @max_age_days 14
+
+  def nixpkgs_date(version) do
+    case Regex.run(~r/\.(\d{4})(\d{2})(\d{2})\./, version) do
+      [_, y, m, d] -> Date.new!(String.to_integer(y), String.to_integer(m), String.to_integer(d))
+      nil -> nil
+    end
+  end
+
+  @doc "Returns a warning when nixpkgs is older than 14 days, or nil."
+  def update_notice(today, version \\ nil), do: notice(today, version || read_version())
+
+  defp notice(_today, :unreadable), do: "System notice: LUNA cannot read the NixOS version."
+
+  defp notice(today, version) do
+    case nixpkgs_date(version) do
+      nil -> "System notice: LUNA cannot read a date in the NixOS version #{inspect(version)}."
+      built -> age_notice(built, Date.diff(today, built))
+    end
+  end
+
+  defp age_notice(_built, age) when age <= @max_age_days, do: nil
+
+  defp age_notice(built, age) do
+    "**System notice:** luna runs nixpkgs from #{Date.to_iso8601(built)}, #{age} days ago. " <>
+      "Security fixes are waiting. In nyx, run `nix flake update`, then `make deploy` in luna/."
+  end
+
+  defp read_version do
+    case File.read(@version_file) do
+      {:ok, text} -> String.trim(text)
+      {:error, _} -> :unreadable
+    end
+  end
+end
+#+end_src
+
+** Memory
+
+#+begin_src elixir :tangle ../pkgs/luna-core-ex/lib/luna_core/memory.ex
+defmodule LunaCore.Memory do
+  @moduledoc """
+  Reads, searches and appends to the org-mode memory in git.
+
+  One GenServer runs each git operation in turn. Thus the chat and the
+  morning brief cannot change the working copy at the same time.
+  """
+  use GenServer
+
+  @allowed_suffixes [".org", ".journal"]
+  @max_read_chars 200_000
+
+  def start_link(opts), do: GenServer.start_link(__MODULE__, opts, name: Keyword.get(opts, :name, __MODULE__))
+
+  def files(server \\ __MODULE__), do: GenServer.call(server, :files)
+  def read(server \\ __MODULE__, path), do: GenServer.call(server, {:read, path}, :timer.seconds(60))
+  def search(server \\ __MODULE__, query, limit \\ 40), do: GenServer.call(server, {:search, query, limit}, :timer.seconds(60))
+  def sync(server \\ __MODULE__), do: GenServer.call(server, :sync, :timer.seconds(60))
+
+  def append(server \\ __MODULE__, path, heading, body, now),
+    do: GenServer.call(server, {:append, path, heading, body, now}, :timer.seconds(60))
+
+  @doc "Commits the files at the paths, then pushes. Does nothing when no file changed."
+  def commit(server \\ __MODULE__, paths, message), do: GenServer.call(server, {:commit, paths, message}, :timer.seconds(60))
+
+  @doc """
+  Returns the absolute path for a path relative to the memory root, or an error.
+  The path must stay in the root, must not touch .git, must not pass a symlink,
+  and must end in .org or .journal.
+  """
+  def resolve(root, relative) do
+    expanded = Path.expand(relative, root)
+
+    cond do
+      Path.type(relative) != :relative ->
+        {:error, "Use a path that is relative to the memory root."}
+
+      expanded != root and not String.starts_with?(expanded, root <> "/") ->
+        {:error, "The path is outside the memory."}
+
+      ".git" in Path.split(Path.relative_to(expanded, root)) or ".git" in Path.split(relative) ->
+        {:error, "The path is outside the memory."}
+
+      Path.extname(expanded) not in @allowed_suffixes ->
+        {:error, "LUNA can open .org and .journal files only."}
+
+      symlink_on_path?(root, expanded) ->
+        {:error, "The path is outside the memory."}
+
+      true ->
+        {:ok, expanded}
+    end
+  end
+
+  defp symlink_on_path?(root, path) do
+    path
+    |> Path.relative_to(root)
+    |> Path.split()
+    |> Enum.scan(root, &Path.join(&2, &1))
+    |> Enum.any?(fn p -> match?({:ok, %File.Stat{type: :symlink}}, File.lstat(p)) end)
+  end
+
+  @impl true
+  def init(opts) do
+    {:ok,
+     %{
+       root: opts |> Keyword.fetch!(:root) |> Path.expand(),
+       audit: Keyword.fetch!(opts, :audit),
+       remote: Keyword.get(opts, :remote, true)
+     }}
+  end
+
+  @impl true
+  def handle_call(:files, _from, s), do: {:reply, list_files(s), s}
+  def handle_call(:sync, _from, s), do: {:reply, do_sync(s), s}
+
+  def handle_call({:read, relative}, _from, s) do
+    reply =
+      with :ok <- do_sync(s),
+           {:ok, path} <- resolve(s.root, relative),
+           {:ok, text} <- read_file(path, relative) do
+        if String.length(text) > @max_read_chars,
+          do: {:ok, String.slice(text, 0, @max_read_chars) <> "\n[LUNA: the file is longer. The text stops here.]"},
+          else: {:ok, text}
+      end
+
+    {:reply, reply, s}
+  end
+
+  def handle_call({:search, query, limit}, _from, s) do
+    reply =
+      with :ok <- do_sync(s) do
+        needle = String.downcase(query)
+
+        hits =
+          list_files(s)
+          |> Stream.flat_map(fn rel ->
+            Path.join(s.root, rel)
+            |> File.read!()
+            |> String.split("\n")
+            |> Stream.with_index(1)
+            |> Stream.filter(fn {line, _} -> String.contains?(String.downcase(line), needle) end)
+            |> Stream.map(fn {line, n} -> "#{rel}:#{n}: #{String.trim(line)}" end)
+          end)
+          |> Enum.take(limit)
+
+        {:ok, hits}
+      end
+
+    {:reply, reply, s}
+  end
+
+  def handle_call({:append, relative, heading, body, now}, _from, s) do
+    reply =
+      with :ok <- do_sync(s),
+           {:ok, path} <- resolve(s.root, relative) do
+        File.mkdir_p!(Path.dirname(path))
+        stamp = Calendar.strftime(now, "[%Y-%m-%d %a %H:%M]")
+        title = heading |> String.replace("\n", " ") |> String.trim()
+        File.write!(path, "\n* #{title}\n:PROPERTIES:\n:CREATED: #{stamp}\n:END:\n#{String.trim_trailing(body)}\n", [:append])
+        rel = Path.relative_to(path, s.root)
+
+        with {:ok, _} <- git(s, ["add", "--", rel]),
+             {:ok, _} <- git(s, ["commit", "--quiet", "-m", "LUNA: add '#{title}' to #{rel}"]),
+             :ok <- push(s) do
+          LunaCore.Audit.write(s.audit, "memory.append", %{file: rel, heading: title})
+          {:ok, "Added '#{title}' to #{rel}."}
+        end
+      end
+
+    {:reply, reply, s}
+  end
+
+  def handle_call({:commit, paths, message}, _from, s) do
+    reply =
+      with {:ok, _} <- git(s, ["add", "--" | paths]),
+           {:ok, status} <- git(s, ["status", "--porcelain", "--" | paths]) do
+        if String.trim(status) == "" do
+          :ok
+        else
+          with {:ok, _} <- git(s, ["commit", "--quiet", "-m", message, "--" | paths]), do: push(s)
+        end
+      end
+
+    {:reply, reply, s}
+  end
+
+  defp list_files(s) do
+    Path.wildcard(Path.join(s.root, "**/*"))
+    |> Enum.filter(&(Path.extname(&1) in @allowed_suffixes))
+    |> Enum.map(&Path.relative_to(&1, s.root))
+    |> Enum.reject(&(".git" in Path.split(&1)))
+    |> Enum.sort()
+  end
+
+  defp read_file(path, relative) do
+    case File.read(path) do
+      {:ok, text} -> {:ok, text}
+      {:error, :enoent} -> {:error, "The file #{relative} does not exist."}
+      {:error, reason} -> {:error, "LUNA cannot read #{relative}: #{reason}"}
+    end
+  end
+
+  defp do_sync(%{remote: false}), do: :ok
+  defp do_sync(s), do: with({:ok, _} <- git(s, ["pull", "--rebase", "--quiet"]), do: :ok)
+
+  defp push(%{remote: false}), do: :ok
+  defp push(s), do: with({:ok, _} <- git(s, ["push", "--quiet", "origin", "HEAD:main"]), do: :ok)
+
+  defp git(s, [command | _] = args) do
+    case System.cmd("git", ["-C", s.root | args], stderr_to_stdout: true) do
+      {out, 0} -> {:ok, out}
+      {out, _} -> {:error, "git #{command} failed: #{String.trim(out)}"}
+    end
+  end
+end
+#+end_src
+
+** Tests
+
+#+begin_src elixir :tangle ../pkgs/luna-core-ex/test/test_helper.exs
+ExUnit.start()
+#+end_src
+
+#+begin_src elixir :tangle ../pkgs/luna-core-ex/test/approvals_test.exs
+defmodule LunaCore.ApprovalsTest do
+  use ExUnit.Case, async: true
+
+  alias LunaCore.Approvals
+
+  @moduletag :tmp_dir
+
+  setup %{tmp_dir: tmp} do
+    dir = Path.join(tmp, "approvals")
+    File.mkdir_p!(dir)
+    audit = Path.join(tmp, "audit.jsonl")
+    test = self()
+    {:ok, server} = Approvals.start_link(dir: dir, audit: audit, name: nil)
+    :ok = Approvals.register(server, "test", fn params -> send(test, {:ran, params}) && "done" end)
+    %{server: server, dir: dir, audit: audit}
+  end
+
+  test "approve runs the executor once", %{server: s} do
+    {:ok, item} = Approvals.request(s, "test", %{"x" => 1}, "Test action")
+    assert Approvals.approve(s, item.id) == "done"
+    assert_received {:ran, %{"x" => 1}}
+    assert Approvals.approve(s, item.id) =~ "no request"
+    refute_received {:ran, _}
+  end
+
+  test "deny does not run the executor", %{server: s} do
+    {:ok, item} = Approvals.request(s, "test", %{}, "Test action")
+    assert Approvals.deny(s, item.id) =~ "Denied"
+    refute_received {:ran, _}
+    assert Approvals.pending(s) == []
+  end
+
+  test "an expired request does not run", %{server: s, dir: dir} do
+    {:ok, item} = Approvals.request(s, "test", %{}, "Old action")
+    path = Path.join(dir, item.id <> ".json")
+    old = DateTime.utc_now() |> DateTime.add(-2, :day) |> DateTime.to_iso8601()
+    File.write!(path, path |> File.read!() |> Jason.decode!() |> Map.put("created", old) |> Jason.encode!())
+    assert Approvals.approve(s, item.id) =~ "expired"
+    refute_received {:ran, _}
+  end
+
+  test "a bad request ID is refused", %{server: s} do
+    assert Approvals.approve(s, "../../etc/passwd") =~ "no request"
+    refute_received {:ran, _}
+  end
+
+  test "an unknown action is refused", %{server: s} do
+    assert {:error, _} = Approvals.request(s, "transfer_money", %{}, "No executor")
+  end
+
+  test "two approvals at the same time run the executor once", %{server: s} do
+    {:ok, item} = Approvals.request(s, "test", %{}, "Race")
+    results = 1..5 |> Enum.map(fn _ -> Task.async(fn -> Approvals.approve(s, item.id) end) end) |> Task.await_many()
+    assert Enum.count(results, &(&1 == "done")) == 1
+  end
+
+  test "the audit log has one sorted JSON line for each event", %{server: s, audit: audit} do
+    {:ok, item} = Approvals.request(s, "test", %{}, "Logged")
+    Approvals.deny(s, item.id)
+    lines = audit |> File.read!() |> String.split("\n", trim: true)
+    assert Enum.map(lines, &Jason.decode!(&1)["event"]) == ["approval.requested", "approval.denied"]
+    assert hd(lines) =~ ~r/^\{"action":/
+  end
+end
+#+end_src
+
+#+begin_src elixir :tangle ../pkgs/luna-core-ex/test/privacy_test.exs
+defmodule LunaCore.PrivacyTest do
+  use ExUnit.Case, async: true
+
+  import LunaCore.Privacy
+
+  for path <- ["money.org", "money/main.journal", "./money/x.org", "briefs/2026.org"] do
+    test "#{path} is sensitive", do: assert(sensitive?(unquote(path)))
+  end
+
+  for path <- ["notes.org", "travel.org", "moneyish.org", "roster.org"] do
+    test "#{path} is not sensitive", do: refute(sensitive?(unquote(path)))
+  end
+
+  test "a path that climbs out of the memory is not money" do
+    refute sensitive?("money/../notes.org")
+  end
+
+  test "the taint blocks writes to clean paths only" do
+    assert write_refusal(nil, "notes.org") == nil
+    taint = "memory_read money.org"
+    assert write_refusal(taint, "notes.org") != nil
+    assert write_refusal(taint, "money.org") == nil
+  end
+
+  for {text, expected} <- [
+        {"Transfer to 062000 12345678", "Transfer to **********5678"},
+        {"Card 4111 1111 1111 1111 Woolworths", "Card ************1111 Woolworths"},
+        {"BSB 062-000", "BSB **2000"},
+        {"Coles 1234.56", "Coles 1234.56"},
+        {"Rent 12,345.67", "Rent 12,345.67"},
+        {"Date 20/11/2026 ref 99", "Date 20/11/2026 ref 99"},
+        {"Short 12345", "Short 12345"},
+        {"Wise TRANSFER-123456789", "Wise TRANSFER-*****6789"},
+        {"Card xx4111 1111 1111 1111", "Card xx************1111"},
+        {"ACCT062000123456", "ACCT********3456"},
+        {"Store 1234 Perth", "Store 1234 Perth"}
+      ] do
+    test "mask #{text}", do: assert(mask_numbers(unquote(text)) == unquote(expected))
+  end
+end
+#+end_src
+
+#+begin_src elixir :tangle ../pkgs/luna-core-ex/test/sysinfo_test.exs
+defmodule LunaCore.SysinfoTest do
+  use ExUnit.Case, async: true
+
+  import LunaCore.Sysinfo
+
+  @version "26.11.20261117.0490633"
+
+  test "the nixpkgs date", do: assert(nixpkgs_date(@version) == ~D[2026-11-17])
+  test "no notice when recent", do: assert(update_notice(~D[2026-11-30], @version) == nil)
+
+  test "a notice when old" do
+    assert update_notice(~D[2026-12-15], @version) =~ "28 days"
+  end
+
+  test "a notice when the version has no date" do
+    assert update_notice(~D[2026-12-15], "26.11") =~ "cannot read a date"
+  end
+end
+#+end_src
+
+#+begin_src elixir :tangle ../pkgs/luna-core-ex/test/memory_test.exs
+defmodule LunaCore.MemoryTest do
+  use ExUnit.Case, async: true
+
+  alias LunaCore.Memory
+
+  @moduletag :tmp_dir
+
+  setup %{tmp_dir: tmp} do
+    root = Path.join(tmp, "memory")
+    File.mkdir_p!(root)
+    # The git config of the user (commit signing, hooks) must not change a test.
+    env = [{"GIT_CONFIG_GLOBAL", "/dev/null"}, {"GIT_CONFIG_NOSYSTEM", "1"},
+           {"GIT_AUTHOR_NAME", "test"}, {"GIT_COMMITTER_NAME", "test"},
+           {"GIT_AUTHOR_EMAIL", "test@example.com"}, {"GIT_COMMITTER_EMAIL", "test@example.com"}]
+    for {k, v} <- env, do: System.put_env(k, v)
+    {_, 0} = System.cmd("git", ["init", "--quiet", root])
+    File.write!(Path.join(root, "notes.org"), "* Notes\nThe base costs AUD 900 per month.\n")
+    {_, 0} = System.cmd("git", ["-C", root, "add", "-A"])
+    {_, 0} = System.cmd("git", ["-C", root, "commit", "--quiet", "-m", "seed"])
+    {:ok, server} = Memory.start_link(root: root, audit: Path.join(tmp, "audit.jsonl"), remote: false, name: nil)
+    %{server: server, root: root, tmp: tmp}
+  end
+
+  for path <- ["/etc/passwd", "../outside.org", ".git/config", "notes.txt", "a/../../x.org", "a/../.git/x.org"] do
+    test "#{path} is refused", %{root: root} do
+      assert {:error, _} = Memory.resolve(root, unquote(path))
+    end
+  end
+
+  test "a path through a symlink is refused", %{root: root, tmp: tmp} do
+    File.mkdir_p!(Path.join(tmp, "outside"))
+    File.write!(Path.join(tmp, "outside/secret.org"), "secret")
+    File.ln_s!(Path.join(tmp, "outside"), Path.join(root, "link"))
+    assert {:error, _} = Memory.resolve(root, "link/secret.org")
+  end
+
+  test "the search ignores case", %{server: s} do
+    assert Memory.search(s, "BASE COSTS") == {:ok, ["notes.org:2: The base costs AUD 900 per month."]}
+  end
+
+  test "append makes a commit", %{server: s, root: root} do
+    {:ok, _} = Memory.append(s, "travel.org", "Bali in March", "- Budget: AUD 60 per night", ~N[2026-11-20 07:00:00])
+    {:ok, text} = Memory.read(s, "travel.org")
+    assert text =~ "* Bali in March"
+    assert text =~ ":CREATED: [2026-11-20 Fri 07:00]"
+    {log, 0} = System.cmd("git", ["-C", root, "log", "--oneline"])
+    assert log =~ "Bali in March"
+  end
+
+  test "the file list has org and journal files only", %{server: s, root: root} do
+    File.write!(Path.join(root, "x.txt"), "no")
+    File.mkdir_p!(Path.join(root, "money"))
+    File.write!(Path.join(root, "money/main.journal"), "")
+    assert Memory.files(s) == ["money/main.journal", "notes.org"]
+  end
+end
+#+end_src
+
 * Build: the Phoenix app
 
 This section is stages E1 and E2 of [[*LUNA on Elixir][LUNA on Elixir]].
@@ -7053,7 +7879,7 @@ DEV       := nix develop $(FLAKE) --command
 
 help:
 	@echo "tangle           Make the build files from $(ORG)."
-	@echo "check            Run the luna-core and luna-web tests. Evaluate the luna host."
+	@echo "check            Run the tests of luna-core, luna-web and luna-core-ex. Evaluate the luna host."
 	@echo "build            Build the full luna system on this laptop."
 	@echo "host-key         Make the SSH host key for the install."
 	@echo "forget-host-key  Delete the local copy of the host key."
@@ -7076,6 +7902,7 @@ tangle:
 check:
 	nix build $(FLAKE)#luna-core --no-link --print-build-logs
 	nix build $(FLAKE)#luna-web --no-link --print-build-logs
+	nix build $(FLAKE)#luna-core-ex --no-link --print-build-logs
 	nix eval --raw $(FLAKE)#nixosConfigurations.$(HOST).config.system.build.toplevel.drvPath
 	echo
 

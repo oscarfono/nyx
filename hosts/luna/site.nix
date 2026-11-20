@@ -35,7 +35,8 @@
   # sttModel: base-int8 is faster, small-int8 is more accurate. Measure on luna.
   # ttsVoice: a Piper voice name. lengthScale above 1.0 speaks slower.
   voice = {
-    sttModel = "small-int8";
+    # base-int8: 1.85 s for 2.7 s of speech on luna. small-int8: 4.4 s.
+    sttModel = "base-int8";
     ttsVoice = "en_GB-cori-high";
     lengthScale = 1.0;
   };

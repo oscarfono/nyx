@@ -19,7 +19,7 @@ DEV       := nix develop $(FLAKE) --command
 
 help:
 	@echo "tangle           Make the build files from $(ORG)."
-	@echo "check            Run the luna-core and luna-web tests. Evaluate the luna host."
+	@echo "check            Run the tests of luna-core, luna-web and luna-core-ex. Evaluate the luna host."
 	@echo "build            Build the full luna system on this laptop."
 	@echo "host-key         Make the SSH host key for the install."
 	@echo "forget-host-key  Delete the local copy of the host key."
@@ -42,6 +42,7 @@ tangle:
 check:
 	nix build $(FLAKE)#luna-core --no-link --print-build-logs
 	nix build $(FLAKE)#luna-web --no-link --print-build-logs
+	nix build $(FLAKE)#luna-core-ex --no-link --print-build-logs
 	nix eval --raw $(FLAKE)#nixosConfigurations.$(HOST).config.system.build.toplevel.drvPath
 	echo
 
