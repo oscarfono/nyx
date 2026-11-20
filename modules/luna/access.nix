@@ -24,6 +24,10 @@ in
   services.openssh = {
     enable = true;
     openFirewall = site.bootstrap;
+    # The ed25519 key from `make host-key` is the only host key. Without this
+    # line, NixOS also makes an RSA key, and sops-nix tries to read it as a
+    # GPG key.
+    hostKeys = [ { path = "/etc/ssh/ssh_host_ed25519_key"; type = "ed25519"; } ];
     settings = {
       PasswordAuthentication = false;
       KbdInteractiveAuthentication = false;

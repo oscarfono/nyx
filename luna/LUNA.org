@@ -405,7 +405,7 @@ Edit these values before the first install.
 
   # Set to true for the install. Set to false after Tailscale works.
   # true opens port 22 to the public internet.
-  bootstrap = true;
+  bootstrap = false;
 
   # Set to true to send nudges to Telegram. Nudges contain no personal data.
   telegram = false;
@@ -619,6 +619,10 @@ in
   services.openssh = {
     enable = true;
     openFirewall = site.bootstrap;
+    # The ed25519 key from `make host-key` is the only host key. Without this
+    # line, NixOS also makes an RSA key, and sops-nix tries to read it as a
+    # GPG key.
+    hostKeys = [ { path = "/etc/ssh/ssh_host_ed25519_key"; type = "ed25519"; } ];
     settings = {
       PasswordAuthentication = false;
       KbdInteractiveAuthentication = false;
@@ -807,23 +811,36 @@ let
 
   memoryInit = pkgs.writeShellScript "luna-memory-init" ''
     set -euo pipefail
-    export PATH=${lib.makeBinPath [ pkgs.git pkgs.coreutils ]}
+    export PATH=${lib.makeBinPath [ pkgs.git pkgs.coreutils pkgs.findutils ]}
     export GIT_AUTHOR_NAME=LUNA GIT_AUTHOR_EMAIL=luna@${fqdn}
     export GIT_COMMITTER_NAME=LUNA GIT_COMMITTER_EMAIL=luna@${fqdn}
     hub=${stateDir}/memory.git
     work=${stateDir}/memory
+    seed=${../../luna/memory-seed}
     if [ ! -d "$hub" ]; then
       git init --bare --shared=group --initial-branch=main "$hub"
     fi
     if [ ! -d "$work/.git" ]; then
       git clone "$hub" "$work"
-      if [ -z "$(git -C "$work" rev-parse --verify --quiet HEAD || true)" ]; then
-        cp -r --no-preserve=mode ${../../luna/memory-seed}/. "$work/"
+    fi
+    # The working copy has no commit. This is the first start, or a first
+    # start that stopped before the commit.
+    if ! git -C "$work" rev-parse --verify --quiet HEAD >/dev/null; then
+      git -C "$work" symbolic-ref HEAD refs/heads/main
+      if git -C "$hub" rev-parse --verify --quiet refs/heads/main >/dev/null; then
+        # The hub has commits, for example from the laptop. Use them.
+        git -C "$work" fetch origin
+        git -C "$work" reset --hard origin/main
+      else
+        # Copy the seed without cp. cp sets the mode of each directory,
+        # and RestrictSUIDSGID refuses a mode with the setgid bit. mkdir
+        # and a redirect let the kernel set the inherited bits.
+        (cd "$seed" && find . -type d) | while read -r d; do mkdir -p "$work/$d"; done
+        (cd "$seed" && find . -type f) | while read -r f; do cat "$seed/$f" > "$work/$f"; done
         git -C "$work" add -A
         git -C "$work" commit -m "Add the memory seed files"
-        git -C "$work" branch -M main
-        git -C "$work" push --set-upstream origin main
       fi
+      git -C "$work" push --set-upstream origin main
     fi
   '';
 in
@@ -884,8 +901,13 @@ in
       Group = "luna";
       UMask = "0007";
       LoadCredential = credentials;
+      # Wait longer after each failure: 30 s, then up to 10 min. A fast
+      # restart loop makes many failed Matrix logins, and Synapse then
+      # refuses all logins for some minutes.
       Restart = "on-failure";
       RestartSec = 30;
+      RestartSteps = 5;
+      RestartMaxDelaySec = 600;
 
       ReadWritePaths = [ stateDir ];
       ProtectSystem = "strict";
@@ -1546,6 +1568,14 @@ class Nudger:
 ** Matrix bot
 
 The bot obeys only the owner account.
+
+LUNA does not use end-to-end encryption, and Element X encrypts a new chat.
+Thus LUNA makes the chat room itself: a private, unencrypted room named "LUNA".
+LUNA invites the owner to the room on the first start.
+Accept the invite. Do not start a new chat with LUNA from Element X.
+If the owner writes in an encrypted room, LUNA cannot read the message.
+LUNA then sends a note in the "LUNA" room.
+
 These commands go to plain code, not to the model:
 
 | Command        | Effect                   |
@@ -1568,7 +1598,17 @@ import time
 from pathlib import Path
 
 import markdown
-from nio import AsyncClient, InviteMemberEvent, LoginResponse, MatrixRoom, RoomMessageText
+from nio import (
+    AsyncClient,
+    InviteMemberEvent,
+    LoginResponse,
+    MatrixRoom,
+    MegolmEvent,
+    RoomCreateResponse,
+    RoomMessageText,
+    RoomPreset,
+    RoomVisibility,
+)
 
 from .agent import Agent
 from .approvals import Approvals, Request
@@ -1613,6 +1653,11 @@ class Bot:
         os.chmod(self.session_file, 0o600)
 
     async def send(self, room_id: str, text: str) -> None:
+        room = self.client.rooms.get(room_id)
+        if room is not None and room.encrypted:
+            # nio has no encryption support here, and room_send would fail.
+            self.audit.write("matrix.send_refused_encrypted", room=room_id)
+            return
         html = markdown.markdown(text, extensions=["fenced_code", "tables"])
         content = {
             "msgtype": "m.text",
@@ -1635,6 +1680,35 @@ class Bot:
             f"Reply `approve {item.id}` or `deny {item.id}`. The request expires in 24 hours."
         )
         await self.nudger.nudge("LUNA needs your approval. Open Matrix.")
+
+    async def _ensure_owner_room(self) -> None:
+        """Make the unencrypted owner room, if LUNA has no owner room yet."""
+        room = self.owner_room
+        if room is not None and room in self.client.rooms:
+            return
+        response = await self.client.room_create(
+            visibility=RoomVisibility.private,
+            name="LUNA",
+            topic="Private chat with LUNA. This room is not end-to-end encrypted.",
+            is_direct=True,
+            preset=RoomPreset.trusted_private_chat,
+            invite=[self.config.owner],
+            federate=False,
+        )
+        if not isinstance(response, RoomCreateResponse):
+            self.audit.write("matrix.room_create_failed", error=str(response))
+            return
+        self.room_file.write_text(response.room_id, encoding="utf-8")
+        self.audit.write("matrix.room_created", room=response.room_id)
+
+    async def _on_encrypted(self, room: MatrixRoom, event: MegolmEvent) -> None:
+        if event.sender != self.config.owner or event.server_timestamp < self.started_ms:
+            return
+        self.audit.write("matrix.encrypted_ignored", room=room.room_id)
+        await self.send_owner(
+            "You wrote to me in an encrypted room. I cannot read encrypted messages. "
+            "Write to me here, in this room."
+        )
 
     async def _on_invite(self, room: MatrixRoom, event: InviteMemberEvent) -> None:
         if event.state_key != self.config.matrix_user or event.membership != "invite":
@@ -1689,6 +1763,8 @@ class Bot:
                 await self.client.join(room_id)
         self.client.add_event_callback(self._on_invite, InviteMemberEvent)
         self.client.add_event_callback(self._on_message, RoomMessageText)
+        self.client.add_event_callback(self._on_encrypted, MegolmEvent)
+        await self._ensure_owner_room()
         self.audit.write("matrix.ready", user=self.config.matrix_user)
         await self.client.sync_forever(timeout=30_000, full_state=True)
 #+end_src

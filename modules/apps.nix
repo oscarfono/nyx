@@ -122,6 +122,12 @@ in
     # Messaging. The official Telegram desktop client.
     telegram-desktop
 
+    # Matrix. Element is the reference client, for the LUNA homeserver on
+    # the tailnet. Daily chat with LUNA is ement.el in Emacs
+    # (~/.emacs.d/lisp/core-matrix.el). Element does device verification
+    # and session management, which ement.el does not.
+    element-desktop
+
     # Utilities
     qalculate-gtk
     tree

@@ -16,23 +16,36 @@ let
 
   memoryInit = pkgs.writeShellScript "luna-memory-init" ''
     set -euo pipefail
-    export PATH=${lib.makeBinPath [ pkgs.git pkgs.coreutils ]}
+    export PATH=${lib.makeBinPath [ pkgs.git pkgs.coreutils pkgs.findutils ]}
     export GIT_AUTHOR_NAME=LUNA GIT_AUTHOR_EMAIL=luna@${fqdn}
     export GIT_COMMITTER_NAME=LUNA GIT_COMMITTER_EMAIL=luna@${fqdn}
     hub=${stateDir}/memory.git
     work=${stateDir}/memory
+    seed=${../../luna/memory-seed}
     if [ ! -d "$hub" ]; then
       git init --bare --shared=group --initial-branch=main "$hub"
     fi
     if [ ! -d "$work/.git" ]; then
       git clone "$hub" "$work"
-      if [ -z "$(git -C "$work" rev-parse --verify --quiet HEAD || true)" ]; then
-        cp -r --no-preserve=mode ${../../luna/memory-seed}/. "$work/"
+    fi
+    # The working copy has no commit. This is the first start, or a first
+    # start that stopped before the commit.
+    if ! git -C "$work" rev-parse --verify --quiet HEAD >/dev/null; then
+      git -C "$work" symbolic-ref HEAD refs/heads/main
+      if git -C "$hub" rev-parse --verify --quiet refs/heads/main >/dev/null; then
+        # The hub has commits, for example from the laptop. Use them.
+        git -C "$work" fetch origin
+        git -C "$work" reset --hard origin/main
+      else
+        # Copy the seed without cp. cp sets the mode of each directory,
+        # and RestrictSUIDSGID refuses a mode with the setgid bit. mkdir
+        # and a redirect let the kernel set the inherited bits.
+        (cd "$seed" && find . -type d) | while read -r d; do mkdir -p "$work/$d"; done
+        (cd "$seed" && find . -type f) | while read -r f; do cat "$seed/$f" > "$work/$f"; done
         git -C "$work" add -A
         git -C "$work" commit -m "Add the memory seed files"
-        git -C "$work" branch -M main
-        git -C "$work" push --set-upstream origin main
       fi
+      git -C "$work" push --set-upstream origin main
     fi
   '';
 in
@@ -93,8 +106,13 @@ in
       Group = "luna";
       UMask = "0007";
       LoadCredential = credentials;
+      # Wait longer after each failure: 30 s, then up to 10 min. A fast
+      # restart loop makes many failed Matrix logins, and Synapse then
+      # refuses all logins for some minutes.
       Restart = "on-failure";
       RestartSec = 30;
+      RestartSteps = 5;
+      RestartMaxDelaySec = 600;
 
       ReadWritePaths = [ stateDir ];
       ProtectSystem = "strict";

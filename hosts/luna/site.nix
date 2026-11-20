@@ -19,7 +19,7 @@
 
   # Set to true for the install. Set to false after Tailscale works.
   # true opens port 22 to the public internet.
-  bootstrap = true;
+  bootstrap = false;
 
   # Set to true to send nudges to Telegram. Nudges contain no personal data.
   telegram = false;

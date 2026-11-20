@@ -8,7 +8,17 @@ import time
 from pathlib import Path
 
 import markdown
-from nio import AsyncClient, InviteMemberEvent, LoginResponse, MatrixRoom, RoomMessageText
+from nio import (
+    AsyncClient,
+    InviteMemberEvent,
+    LoginResponse,
+    MatrixRoom,
+    MegolmEvent,
+    RoomCreateResponse,
+    RoomMessageText,
+    RoomPreset,
+    RoomVisibility,
+)
 
 from .agent import Agent
 from .approvals import Approvals, Request
@@ -53,6 +63,11 @@ class Bot:
         os.chmod(self.session_file, 0o600)
 
     async def send(self, room_id: str, text: str) -> None:
+        room = self.client.rooms.get(room_id)
+        if room is not None and room.encrypted:
+            # nio has no encryption support here, and room_send would fail.
+            self.audit.write("matrix.send_refused_encrypted", room=room_id)
+            return
         html = markdown.markdown(text, extensions=["fenced_code", "tables"])
         content = {
             "msgtype": "m.text",
@@ -75,6 +90,35 @@ class Bot:
             f"Reply `approve {item.id}` or `deny {item.id}`. The request expires in 24 hours."
         )
         await self.nudger.nudge("LUNA needs your approval. Open Matrix.")
+
+    async def _ensure_owner_room(self) -> None:
+        """Make the unencrypted owner room, if LUNA has no owner room yet."""
+        room = self.owner_room
+        if room is not None and room in self.client.rooms:
+            return
+        response = await self.client.room_create(
+            visibility=RoomVisibility.private,
+            name="LUNA",
+            topic="Private chat with LUNA. This room is not end-to-end encrypted.",
+            is_direct=True,
+            preset=RoomPreset.trusted_private_chat,
+            invite=[self.config.owner],
+            federate=False,
+        )
+        if not isinstance(response, RoomCreateResponse):
+            self.audit.write("matrix.room_create_failed", error=str(response))
+            return
+        self.room_file.write_text(response.room_id, encoding="utf-8")
+        self.audit.write("matrix.room_created", room=response.room_id)
+
+    async def _on_encrypted(self, room: MatrixRoom, event: MegolmEvent) -> None:
+        if event.sender != self.config.owner or event.server_timestamp < self.started_ms:
+            return
+        self.audit.write("matrix.encrypted_ignored", room=room.room_id)
+        await self.send_owner(
+            "You wrote to me in an encrypted room. I cannot read encrypted messages. "
+            "Write to me here, in this room."
+        )
 
     async def _on_invite(self, room: MatrixRoom, event: InviteMemberEvent) -> None:
         if event.state_key != self.config.matrix_user or event.membership != "invite":
@@ -129,5 +173,7 @@ class Bot:
                 await self.client.join(room_id)
         self.client.add_event_callback(self._on_invite, InviteMemberEvent)
         self.client.add_event_callback(self._on_message, RoomMessageText)
+        self.client.add_event_callback(self._on_encrypted, MegolmEvent)
+        await self._ensure_owner_room()
         self.audit.write("matrix.ready", user=self.config.matrix_user)
         await self.client.sync_forever(timeout=30_000, full_state=True)
