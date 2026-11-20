@@ -78,19 +78,37 @@
             content = {
               type = "luks";
               name = "cryptroot";
-              # NO keyFile AND NO passwordFile.
+              # passwordFile, AND THIS IS NOT OPTIONAL. This is the one
+              # setting that was wrong in the first draft of this file, and
+              # the install would have failed at the format step without it.
               #
-              # That is the point: the passphrase is prompted for in the
-              # initrd, which is what makes this encryption rather than
-              # decoration. A key file on the machine would sit next to the
-              # lock; a key file loaded into the Nix store would be readable
-              # from the store.
+              # disko must be able to FORMAT the volume, and it takes the
+              # passphrase from this file with $(cat ...). nixos-anywhere
+              # uploads the file into the installer environment before
+              # formatting, which is what its --disk-encryption-keys flag is
+              # for; the file never reaches the installed system.
               #
-              # nixos-anywhere needs to OPEN this volume to install into it,
-              # so the installer supplies the passphrase for the duration of
-              # the install. That is what its disk-encryption-keys flag is for
-              # — the exact flag name is confirmed in the runbook, on the
-              # machine that runs it, with `--help`.
+              # passwordFile, NOT keyFile, and the difference is the whole
+              # point:
+              #
+              #   passwordFile = used during formatting and installation only.
+              #                  NOT baked into the system. At boot the initrd
+              #                  still asks a person for the passphrase, which
+              #                  is what makes this encryption rather than
+              #                  decoration.
+              #   settings.keyFile = a file EXPECTED AT BOOT. Set it and the
+              #                  machine looks for that file every time it
+              #                  starts; if it is absent the unlock FAILS. A
+              #                  key file sitting on the machine is a key
+              #                  sitting next to the lock, and one loaded from
+              #                  the Nix store is readable from the store.
+              #
+              # The first draft of this file assumed the passphrase would be
+              # "prompted for in the initrd" during the install. An unattended
+              # install runs over SSH and cannot prompt, so it would have hung
+              # or errored on a machine the Director cannot reach except through
+              # a provider console.
+              passwordFile = "/tmp/cryptroot.key";
               settings.allowDiscards = true;
               content = {
                 type = "filesystem";

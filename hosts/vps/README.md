@@ -313,3 +313,71 @@ restic to our own bucket, with our own sandbox, tools and cron. A hosted agent r
 would mean renting someone else's process, paying by the token, and giving up the
 rebuild, the backup and the key custody in one move. **A plain Droplet with Debian 12,
 and not a Marketplace one-click image either** — we replace the operating system.
+
+## Where each piece runs, and the install command exactly
+
+Asked directly: *"do i need nixos-anywhere installed on beta? or is that what we install on
+the debian box?"* — and the answer is **neither**, which is the counter-intuitive part.
+
+**Nothing is installed on the target, and the Debian install does not survive.** The
+droplet is not the thing being configured; it is the thing being *overwritten*.
+`nixos-anywhere` connects by SSH, `kexec`s the machine into a NixOS installer held in RAM,
+and disko then destroys and repartitions the disk. That is why the tool's own documentation
+says in bold: *"Never use a production server as the target. It will be completely
+overwritten and all data lost."* The Debian image's only job is to be reachable and to
+support `kexec`.
+
+**Nothing needs installing on beta either.** `nixos-anywhere` is a flake, not a package —
+`nix run github:nix-community/nixos-anywhere` fetches and runs it in one step. Nothing is
+added to the system.
+
+**What each side actually needs**, from the tool's own prerequisites:
+
+| | needs |
+|---|---|
+| beta (source) | Nix with flakes; the nyx flake present; network; the private half of the SSH key the droplet has |
+| the droplet (target) | root SSH; x86-64 with `kexec` support; at least 2 GB RAM |
+
+**The sequence, on beta:**
+
+```sh
+cd ~/Projects/nyx
+nix flake update                                   # REQUIRED ONCE: the disko input has no revision in flake.lock yet
+nixos-rebuild build --flake ~/Projects/nyx#vps     # proves it evaluates BEFORE the box is at risk
+
+# the LUKS passphrase, into a file — printf, NOT echo (see below)
+printf '%s' 'THE-REAL-PASSPHRASE' > /tmp/cryptroot.key
+chmod 600 /tmp/cryptroot.key
+
+nix run github:nix-community/nixos-anywhere -- \
+  --flake ~/Projects/nyx#vps \
+  --disk-encryption-keys /tmp/cryptroot.key /tmp/cryptroot.key \
+  root@<droplet-ip>
+
+shred -u /tmp/cryptroot.key                        # and keep the passphrase nowhere else but your head and the vault USB
+```
+
+**The pairing that has to match:** the remote path in `--disk-encryption-keys` must be the
+same path the disk layout names in `passwordFile`, which is `/tmp/cryptroot.key` in both
+lines above. Get it wrong and disko has nothing to read when it formats.
+
+**`printf '%s'`, not `echo`.** disko reads this file with `$(cat ...)`, which strips a
+trailing newline, so formatting succeeds either way — but the same file read later by
+`cryptsetup --key-file` (for example `luksChangeKey`) does *not* strip anything, and
+`my-passphrase` is not `my-passphrase\n`. It fails confusingly and only if you already know
+why, which is the definition of a bad evening. One upstream issue exists for exactly this.
+
+**The passphrase's destinations, stated plainly:** it is typed once into the file above,
+uploaded into the installer's RAM, used to format, and then asked for by the initrd at
+every boot from then on. It is **not** baked into the system — `passwordFile` is an
+install-time option; `settings.keyFile` would be the boot-time one and is deliberately not
+set, because a key file on the machine sits next to the lock.
+
+**Pin the revision if the install is important.** `nix run github:...` tracks `main`, so
+the tool can change between the rehearsal and the real thing. For the run that matters,
+name a tag or a commit.
+
+**Optional and more cautious:** install with a throwaway bootstrap key, then replace it
+with the real passphrase afterwards via `cryptsetup luksChangeKey` at the console. The real
+passphrase then never exists as a file at any point. Slower, and it needs console access to
+a machine whose firewall does not open SSH, so it is noted rather than recommended.
