@@ -366,6 +366,84 @@ The test passes when the API runs no search after the removal.
 
 Status: *not run*. The first run failed with "credit balance is too low".
 
+* LUNA on Elixir
+
+This section is the plan to move LUNA to the stack of Coops:
+Elixir, Phoenix, JavaScript, Go and PostgreSQL.
+The move has stages. Each stage keeps LUNA in service.
+The Python core stays until the new core passes the same tests.
+
+** Target architecture
+
+#+begin_example
+  Browser (laptop, phone)                  Element X / ement.el
+        │ HTTPS :8443, Tailscale identity        │ Matrix
+        ▼                                        ▼
+  ┌──────────── luna (NixOS) ───────────────────────────────────────┐
+  │ luna_web: Phoenix LiveView ─── PostgreSQL (unix socket, peer auth)│
+  │   ├─ Chat, task view, widgets, approvals, money, system          │
+  │   ├─ Camera frames, push-to-talk, voice replies                  │
+  │   └─ Wyoming client ──► faster-whisper (STT)  127.0.0.1:10300    │
+  │                    └──► piper (TTS, female voice) 127.0.0.1:10200│
+  │        │ internal API, unix socket                               │
+  │        ▼                                                         │
+  │ luna-core (Python now; Elixir or Go later): agent, tools, Matrix  │
+  └──────────────────────────────────────────────────────────────────┘
+#+end_example
+
+** Decisions
+
+| Item              | Decision                                                            |
+|-------------------+---------------------------------------------------------------------|
+| Web interface     | Phoenix LiveView. No JavaScript framework. Small hooks for camera and audio. |
+| Database          | PostgreSQL 18 on luna. Unix socket and peer authentication only.    |
+| Audit log         | A PostgreSQL table. A trigger refuses UPDATE and DELETE.            |
+| Login             | A Plug checks =Tailscale-User-Login=, as the Python app does.       |
+| Voice in          | =services.wyoming.faster-whisper=, local on luna                    |
+| Voice out         | =services.wyoming.piper=, local on luna, a female voice             |
+| Packaging         | =mixRelease= with =fetchMixDeps= in the nyx flake                   |
+| Core language     | Not decided: Elixir (Req over HTTP) or Go (official Anthropic SDK)  |
+| Money ledger      | Stays hledger plain text in the memory, for Emacs                   |
+
+** Stages
+
+| Stage | Result                                                                    | Done when                          |
+|-------+---------------------------------------------------------------------------+------------------------------------|
+| E1    | Phoenix app and PostgreSQL in the flake. Deploy at :8443 in place of the Python app. | The page loads with the Tailscale login |
+| E2    | Chat, approvals, money and system panels in LiveView, through the core API | All Python web tests pass as Elixir tests |
+| E3    | Voice: push-to-talk, faster-whisper, Piper female voice. Camera frames.   | A spoken question gets a spoken reply |
+| E4    | Task view (plan, tool calls, results) and fixed widgets                   | The core streams events to the page |
+| E5    | Port the core. Port the tests first.                                       | All core tests pass. Python retires. |
+
+** Feature backlog
+
+These ideas come from a review of 15 assistant projects on 2026-11-20.
+Each idea has its source project and its stage.
+
+| #  | Feature                                                                 | Source            | Stage |
+|----+-------------------------------------------------------------------------+-------------------+-------|
+| 1  | Approve with a Matrix reaction. Code still parses and checks the reply.  | OpenClaw          | core  |
+| 2  | Answer fixed phrases ("safe to spend", "next swing") in code first      | Home Assistant, OVOS | E3 |
+| 3  | A spoken morning brief for the FIFO roster                              | OpenJarvis        | E3    |
+| 4  | Voice through the Wyoming protocol, with a local wake word              | Home Assistant    | E3    |
+| 5  | Voice input cannot approve a tier 2 action                              | Home Assistant    | E3    |
+| 6  | A task view: the plan, each tool call and each result, live            | Leon              | E4    |
+| 7  | Fixed widgets in chat: safe-to-spend gauge, bills, roster strip         | Leon, LibreChat   | E4    |
+| 8  | Labelled memory sections. Some sections are read-only to LUNA.          | Letta             | E5    |
+| 9  | Scheduled jobs in plain language, with the result in Matrix             | Hermes, Khoj      | E5    |
+| 10 | Refuse a tier 2 request from a scheduled job when no human is present   | OpenClaw          | core  |
+| 11 | Transcribe voice memos from Matrix                                       | Hermes            | E3    |
+| 12 | Branch a conversation to compare plans                                  | LibreChat         | E4    |
+
+** Ideas that LUNA does not use
+
+- Control of a computer or a shell. One command can send data out after a money read.
+- Plugin marketplaces. A plugin runs code from a stranger inside LUNA.
+- Approval by a model. Code checks each approval. The model never approves itself.
+- Skills that LUNA writes and uses at once. A new skill is a git diff that Coops reviews.
+- Many public chat channels. Each channel adds attack surface outside the tailnet.
+- Panels made from HTML that the model writes. That is an injection risk.
+
 * Install procedure
 
 #+begin_quote
