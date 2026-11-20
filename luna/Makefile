@@ -15,7 +15,7 @@ SSH_KEY   ?= $(HOME)/.ssh/luna_ed25519
 BOOTSTRAP := $(HOME)/.local/state/luna/bootstrap
 DEV       := nix develop $(FLAKE) --command
 
-.PHONY: help tangle check build install deploy host-key forget-host-key secrets matrix-users money-upload logs web-logs web-lock web-vm-test egress-vm-test sentry-vm-test deps-audit audit
+.PHONY: help tangle check build install deploy host-key forget-host-key secrets matrix-users money-upload logs web-logs web-lock web-vm-test egress-vm-test sentry-vm-test integrity-vm-test verify deps-audit audit
 
 help:
 	@echo "tangle           Make the build files from $(ORG)."
@@ -34,6 +34,8 @@ help:
 	@echo "web-vm-test      Run the luna-web VM test. The test needs KVM."
 	@echo "egress-vm-test   Run the VM test of the outbound allowlist. The test needs KVM."
 	@echo "sentry-vm-test   Run the VM test of the alerts. The test needs KVM."
+	@echo "integrity-vm-test Run the VM test of the integrity check and the brief."
+	@echo "verify           Make sure that luna runs the system that this tree builds."
 	@echo "deps-audit       Show retired Hex packages and security advisories."
 	@echo "audit            Show the end of the audit log."
 
@@ -119,6 +121,23 @@ egress-vm-test:
 sentry-vm-test:
 	nix build --impure --no-link --print-build-logs --expr \
 	  '(builtins.getFlake "$(FLAKE)").inputs.nixpkgs.legacyPackages.x86_64-linux.callPackage $(abspath tests/sentry-vm.nix) { }'
+
+integrity-vm-test:
+	nix build --impure --no-link --print-build-logs --expr \
+	  '(builtins.getFlake "$(FLAKE)").inputs.nixpkgs.legacyPackages.x86_64-linux.callPackage $(abspath tests/integrity-vm.nix) { }'
+
+# The check from the laptop (B3). A root attacker on luna can change the checks
+# on luna, but not this build on the laptop. The tree must be the deployed commit.
+verify:
+	expected="$$(nix build $(FLAKE)#nixosConfigurations.$(HOST).config.system.build.toplevel --no-link --print-out-paths)"
+	running="$$(ssh root@$(HOST) readlink -f /run/current-system)"
+	if [ "$$expected" = "$$running" ]; then
+	  echo "luna runs the expected system: $$running"
+	else
+	  echo "MISMATCH. Expected: $$expected"
+	  echo "          Running:  $$running"
+	  exit 1
+	fi
 
 # mix hex.audit reads the advisories from hex.pm, so it needs the network.
 deps-audit:

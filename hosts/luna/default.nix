@@ -17,6 +17,7 @@ in
     ../../modules/luna/voice.nix
     ../../modules/luna/egress.nix
     ../../modules/luna/sentry.nix
+    ../../modules/luna/integrity.nix
   ];
 
   _module.args = { inherit site secretsReady; };

@@ -99,6 +99,15 @@ defmodule LunaCore.Api do
     end
   end
 
+  # A long notice, for example the daily security brief (B4).
+  post "/api/notice" do
+    case {conn.assigns.core[:alerts], conn.body_params["text"]} do
+      {nil, _} -> reply(conn, 404, %{error: "No notices here."})
+      {_, text} when not is_binary(text) or text == "" -> reply(conn, 400, %{error: "Send a text."})
+      {alerts, text} -> reply(conn, 200, %{result: LunaCore.Alerts.notice(alerts, text)})
+    end
+  end
+
   get "/api/money" do
     case conn.assigns.core[:money] do
       nil -> reply(conn, 200, %{text: "Money is off. Refer to 'The gate for phase 2' in LUNA.org."})

@@ -16,6 +16,15 @@ defmodule LunaCore.AlertsTest do
     assert_received {:sent, "**Blue team:** luna-core failed (core-dump)"}
   end
 
+  test "a notice keeps its lines, and has its own limit", %{alerts: a} do
+    assert Alerts.notice(a, "**Security brief**\n\n- line one\n- line two") == :sent
+    assert_received {:sent, "**Security brief**\n\n- line one\n- line two"}
+    for _ <- 1..4, do: assert(Alerts.notice(a, "x") == :sent)
+    assert Alerts.notice(a, "sixth") == :logged
+    # The notices do not use the alert limit.
+    assert Alerts.alert(a, "still works") == :sent
+  end
+
   test "over the limit: one notice, then the audit log only", %{alerts: a, tmp: tmp} do
     assert Alerts.alert(a, "one") == :sent
     assert Alerts.alert(a, "two") == :sent

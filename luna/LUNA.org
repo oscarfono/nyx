@@ -768,6 +768,7 @@ in
     ../../modules/luna/voice.nix
     ../../modules/luna/egress.nix
     ../../modules/luna/sentry.nix
+    ../../modules/luna/integrity.nix
   ];
 
   _module.args = { inherit site secretsReady; };
@@ -5744,6 +5745,15 @@ defmodule LunaCore.Api do
     end
   end
 
+  # A long notice, for example the daily security brief (B4).
+  post "/api/notice" do
+    case {conn.assigns.core[:alerts], conn.body_params["text"]} do
+      {nil, _} -> reply(conn, 404, %{error: "No notices here."})
+      {_, text} when not is_binary(text) or text == "" -> reply(conn, 400, %{error: "Send a text."})
+      {alerts, text} -> reply(conn, 200, %{result: LunaCore.Alerts.notice(alerts, text)})
+    end
+  end
+
   get "/api/money" do
     case conn.assigns.core[:money] do
       nil -> reply(conn, 200, %{text: "Money is off. Refer to 'The gate for phase 2' in LUNA.org."})
@@ -10023,8 +10033,8 @@ The blue team is a set of controls that run all the time. It comes before any em
 |------+-------------------------------------------------------------------------+-------|
 | B1   | The outbound allowlist: a filtering proxy, and no direct internet for the core and the web app | Done |
 | B2   | Alerts to Matrix: SSH sessions, failed units, sandbox kills, refused egress | Done |
-| B3   | Integrity: the running system and the Nix store                         | Next  |
-| B4   | A daily security brief, made in code                                    |       |
+| B3   | Integrity: the running system and the Nix store                         | Done  |
+| B4   | A daily security brief, made in code                                    | Done  |
 | B5   | A re-login check for Tailscale SSH ("check" in place of "accept"). Coops decides. | |
 | B6   | The fixed shape of email: read-only, untrusted text, no web after a read, no send | |
 
@@ -10357,10 +10367,30 @@ defmodule LunaCore.Alerts do
   @doc "Sends one alert. The text is one line from luna-sentry."
   def alert(server \\ __MODULE__, text), do: GenServer.call(server, {:alert, text})
 
-  @impl true
-  def init(opts), do: {:ok, %{opts: opts, sent: [], paused: false}}
+  @doc """
+  Sends one long notice, for example the daily security brief (B4). The text
+  keeps its lines. The server sends at most 5 notices in each hour.
+  """
+  def notice(server \\ __MODULE__, text), do: GenServer.call(server, {:notice, text})
 
   @impl true
+  def init(opts), do: {:ok, %{opts: opts, sent: [], paused: false, notices: []}}
+
+  @impl true
+  def handle_call({:notice, text}, _from, state) do
+    now = System.monotonic_time(:millisecond)
+    recent = Enum.filter(state.notices, &(now - &1 < @window_ms))
+    text = String.slice(text, 0, 4000)
+    LunaCore.Audit.write(Keyword.fetch!(state.opts, :audit), "notice", %{chars: String.length(text)})
+
+    if length(recent) < 5 do
+      Keyword.fetch!(state.opts, :send).(text)
+      {:reply, :sent, %{state | notices: [now | recent]}}
+    else
+      {:reply, :logged, %{state | notices: recent}}
+    end
+  end
+
   def handle_call({:alert, text}, _from, state) do
     now = System.monotonic_time(:millisecond)
     recent = Enum.filter(state.sent, &(now - &1 < @window_ms))
@@ -10400,6 +10430,15 @@ defmodule LunaCore.AlertsTest do
   test "an alert goes to the owner, on one line", %{alerts: a} do
     assert Alerts.alert(a, "luna-core failed\n(core-dump)") == :sent
     assert_received {:sent, "**Blue team:** luna-core failed (core-dump)"}
+  end
+
+  test "a notice keeps its lines, and has its own limit", %{alerts: a} do
+    assert Alerts.notice(a, "**Security brief**\n\n- line one\n- line two") == :sent
+    assert_received {:sent, "**Security brief**\n\n- line one\n- line two"}
+    for _ <- 1..4, do: assert(Alerts.notice(a, "x") == :sent)
+    assert Alerts.notice(a, "sixth") == :logged
+    # The notices do not use the alert limit.
+    assert Alerts.alert(a, "still works") == :sent
   end
 
   test "over the limit: one notice, then the audit log only", %{alerts: a, tmp: tmp} do
@@ -10474,6 +10513,244 @@ testers.runNixOSTest {
     machine.sleep(3)
     count = machine.succeed("grep -c 'SSH login on luna' /tmp/alerts").strip()
     assert count == "1", f"two SSH alerts in one window: {count}"
+  '';
+}
+#+end_src
+
+** B3: integrity
+
+*CAUTION:* A check that runs on luna cannot stop an attacker who is root on luna: that attacker can
+change the check. The checks on luna find a mistake, a careless attacker and a corrupt disk.
+=make verify= on the laptop builds the system from this tree and compares it with the running system.
+
+Each activation (a deploy or a boot) records two things in =/var/lib/luna-integrity=:
+- =baseline=: the hashes of the files that an attacker changes to stay on a host: setuid files,
+  the SSH keys of root, =/etc/ssh=, =sudoers=, the user files, units in =/etc= and cron.
+- =expected-system=: the system that the activation installed.
+
+Each night at 03:30 (the owner time zone), =luna-integrity= runs as root, read-only and with no network:
+1. It compares the files with the baseline, and names each changed file.
+2. It makes sure that =/run/current-system= is the expected system.
+3. =nix-store --verify --check-contents= compares each store path with the hash from its build.
+
+A problem sends an alert (B2). The result goes to =last.json= for the brief.
+
+** B4: the daily security brief
+
+Each morning at 07:05 (the owner time zone), =luna-security-brief= sends one notice to the owner room,
+made in code: the SSH logins of the last 24 hours, the count of alerts, egress refusals, sandbox kills
+and unit failures, the failed units now, the integrity result, the age of nixpkgs, the last deploy
+and the disk. A notice goes to =POST /api/notice=: it keeps its lines, and the core sends at most 5
+notices in each hour.
+
+*Test.* =make integrity-vm-test= makes sure that a clean system gives no alert, that a new SSH key
+for root gives an alert with the file name, and that the brief shows the problem.
+
+#+begin_src nix :tangle ../modules/luna/integrity.nix
+{ pkgs, lib, site, ... }:
+let
+  state = "/var/lib/luna-integrity";
+  path = lib.makeBinPath (with pkgs; [ coreutils diffutils findutils gnugrep gnused gawk jq curl systemd nix util-linux ]);
+
+  # Post a text to the core API: "alert" (one line) or "notice" (a long text).
+  post = pkgs.writeShellScript "luna-post" ''
+    export PATH=${path}
+    kind=$1; text=$2
+    jq -n --arg t "$text" '{text: $t}' \
+      | curl -sS --max-time 15 --unix-socket /run/luna-api/api.sock -H 'content-type: application/json' \
+          --data-binary @- -o /dev/null "http://core/api/$kind" \
+      || echo "luna-integrity: the core did not take the $kind: $text" >&2
+  '';
+
+  # The files an attacker changes to stay on a host. Each line: the hash and the path.
+  manifest = pkgs.writeShellScript "luna-manifest" ''
+    export PATH=${path}
+    {
+      # Files with the setuid or setgid bit, outside the Nix store.
+      find / -xdev \( -path /nix -o -path /proc -o -path /sys \) -prune -o -type f -perm /6000 -print 2>/dev/null
+      # Keys, accounts, sudo and the SSH configuration.
+      for f in /root/.ssh/authorized_keys /etc/sudoers /etc/passwd /etc/shadow /etc/group /etc/ssh/sshd_config; do
+        [ -e "$f" ] && echo "$f"
+      done
+      find /etc/ssh/authorized_keys.d /root/.ssh -type f 2>/dev/null
+      # Units and timers outside the Nix store, and cron.
+      find /etc/systemd/system /etc/systemd/user /etc/cron.d /var/spool/cron -type f 2>/dev/null
+    } | sort -u | while read -r f; do sha256sum "$f" 2>/dev/null || echo "unreadable  $f"; done
+  '';
+
+  check = pkgs.writeShellScript "luna-integrity" ''
+    export PATH=${path}
+    set -u
+    changed=$(diff ${state}/baseline <(${manifest}) | grep -E '^[<>]' | awk '{print $NF}' | sort -u | paste -sd ' ' || true)
+    current=$(readlink -f /run/current-system)
+    expected=$(cat ${state}/expected-system 2>/dev/null || echo none)
+    # Each store path against the hash from its build.
+    bad=$(nix-store --verify --check-contents 2>&1 | grep -c "was modified" || true)
+
+    system_ok=true
+    [ "$current" = "$expected" ] || system_ok=false
+
+    jq -n --arg time "$(date -u +%FT%TZ)" --arg changed "$changed" --argjson bad "$bad" \
+          --argjson system_ok "$system_ok" --arg current "$current" \
+          '{time: $time, changed: $changed, store_modified: $bad, system_ok: $system_ok, system: $current}' \
+          > ${state}/last.json
+
+    if [ -n "$changed" ]; then ${post} alert "Integrity: changed since the last deploy: $changed"; fi
+    if [ "$bad" -gt 0 ]; then ${post} alert "Integrity: $bad Nix store paths do not match their hash."; fi
+    if [ "$system_ok" != true ]; then ${post} alert "Integrity: the running system is not the system of the last deploy."; fi
+  '';
+
+  brief = pkgs.writeShellScript "luna-security-brief" ''
+    export PATH=${path}
+    set -u
+    since=$(date -u -d '-24 hours' +%FT%T)
+
+    logins=$(journalctl -u tailscaled --since -24h -o cat 2>/dev/null \
+      | sed -nE 's/.*audit: SSH login: user=([^ ]+).*node=([^.]+).*/\1 from \2/p' \
+      | sort | uniq -c | awk '{c=$1; $1=""; printf "%s%s (%d)", (n++ ? ", " : ""), substr($0,2), c}')
+    alerts=$(jq -r --arg s "$since" 'select(.event == "alert" and .time >= $s) | .text' /var/lib/luna/audit/audit.jsonl 2>/dev/null | wc -l)
+    refused=$(journalctl -u tinyproxy --since -24h -o cat 2>/dev/null | grep -ci refused || true)
+    kills=$(journalctl -k --since -24h -o cat 2>/dev/null | grep -c 'type=1326' || true)
+    failures=$(journalctl --since -24h -o cat 2>/dev/null | grep -c 'Failed with result' || true)
+    failed_now=$(systemctl --failed --plain --no-legend 2>/dev/null | awk '{print $1}' | paste -sd ' ')
+    if [ -f ${state}/last.json ]; then
+      integrity=$(jq -r 'if (.changed == "" and .store_modified == 0 and .system_ok) then "clean (\(.time))" else "PROBLEMS: changed [\(.changed)], store \(.store_modified), system ok \(.system_ok)" end' ${state}/last.json)
+    else
+      integrity="no check yet"
+    fi
+    version=$(cat /run/current-system/nixos-version)
+    built=$(echo "$version" | sed -nE 's/.*\.([0-9]{4})([0-9]{2})([0-9]{2})\..*/\1-\2-\3/p')
+    if [ -n "$built" ]; then
+      nixpkgs="$built, $(( ( $(date +%s) - $(date -d "$built" +%s) ) / 86400 )) days old"
+    else
+      nixpkgs="unknown ($version)"
+    fi
+    deployed=$(date -r /nix/var/nix/profiles/system '+%Y-%m-%d %H:%M %Z' 2>/dev/null || echo unknown)
+    disk=$(df -h --output=pcent,avail / | tail -1 | awk '{print $1 " used, " $2 " free"}')
+
+    text="**Security brief, $(date '+%A %-d %B')**
+
+    - SSH logins: ''${logins:-none}
+    - Alerts: $alerts in 24 hours
+    - Egress refused: $refused
+    - Sandbox kills: $kills
+    - Unit failures: $failures in 24 hours. Failed now: ''${failed_now:-none}
+    - Integrity: $integrity
+    - nixpkgs: $nixpkgs
+    - Last deploy: $deployed
+    - Disk: $disk"
+    ${post} notice "$(printf '%s\n' "$text" | sed -E 's/^    //')"
+  '';
+
+  hardened = {
+    Type = "oneshot";
+    Nice = 19;
+    IOSchedulingClass = "idle";
+    ProtectHome = "read-only";
+    PrivateTmp = true;
+    NoNewPrivileges = true;
+    # The core API is a unix socket: no network.
+    IPAddressDeny = "any";
+    RestrictAddressFamilies = [ "AF_UNIX" ];
+  };
+in
+{
+  # Each activation (a deploy or a boot) records what is expected.
+  # Activation is the only expected path for a change to these files.
+  system.activationScripts.luna-integrity-baseline = {
+    deps = [ "users" "etc" ];
+    text = ''
+      mkdir -p ${state}
+      chmod 0700 ${state}
+      ${manifest} > ${state}/baseline
+      echo "$systemConfig" > ${state}/expected-system
+    '';
+  };
+
+  # B3: each night, the integrity check (as root, but read-only and with no network).
+  systemd.services.luna-integrity = {
+    description = "LUNA blue team: the integrity check";
+    serviceConfig = hardened // {
+      ExecStart = check;
+      TimeoutStartSec = "3h";
+      ReadWritePaths = [ state ];
+      ProtectSystem = "strict";
+    };
+  };
+  systemd.timers.luna-integrity = {
+    wantedBy = [ "timers.target" ];
+    timerConfig = { OnCalendar = "*-*-* 03:30:00 ${site.ownerTimeZone}"; Persistent = true; };
+  };
+
+  # B4: each morning, the security brief.
+  systemd.services.luna-security-brief = {
+    description = "LUNA blue team: the daily security brief";
+    serviceConfig = hardened // { ExecStart = brief; ProtectSystem = "strict"; };
+  };
+  systemd.timers.luna-security-brief = {
+    wantedBy = [ "timers.target" ];
+    timerConfig = { OnCalendar = "*-*-* 07:05:00 ${site.ownerTimeZone}"; Persistent = true; };
+  };
+}
+#+end_src
+
+#+begin_src nix :tangle tests/integrity-vm.nix
+# The VM test of modules/luna/integrity.nix (blue team, B3 and B4). Run it with: make integrity-vm-test
+{ testers }:
+
+testers.runNixOSTest {
+  name = "luna-integrity";
+  node.specialArgs.site = { ownerTimeZone = "Australia/Perth"; };
+  nodes.machine = { pkgs, ... }: {
+    imports = [ ../../modules/luna/integrity.nix ];
+    environment.systemPackages = [ pkgs.jq ];
+    # A fake core API on the unix socket: it writes the path and the body of each POST to /tmp/posts.
+    systemd.services.fake-core = {
+      wantedBy = [ "multi-user.target" ];
+      script = ''
+        mkdir -p /run/luna-api
+        rm -f /run/luna-api/api.sock
+        exec ${pkgs.python3}/bin/python3 ${pkgs.writeText "fake-core.py" ''
+          import http.server, json, socketserver
+          class Handler(http.server.BaseHTTPRequestHandler):
+              def do_POST(self):
+                  body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+                  with open("/tmp/posts", "a") as f:
+                      f.write(self.path + " " + body["text"].replace("\n", " | ") + "\n")
+                  self.send_response(200)
+                  self.send_header("Content-Length", "2")
+                  self.end_headers()
+                  self.wfile.write(b"{}")
+              def address_string(self):
+                  return "unix"
+          socketserver.UnixStreamServer("/run/luna-api/api.sock", Handler).serve_forever()
+        ''}
+      '';
+    };
+  };
+  testScript = ''
+    machine.wait_for_unit("fake-core.service")
+    machine.wait_for_file("/run/luna-api/api.sock")
+    machine.succeed("test -s /var/lib/luna-integrity/baseline")
+    machine.succeed("test \"$(cat /var/lib/luna-integrity/expected-system)\" = \"$(readlink -f /run/current-system)\"")
+
+    # A clean system: the check sends no alert.
+    machine.succeed("systemctl start luna-integrity.service")
+    machine.succeed("jq -e '.changed == \"\" and .system_ok' /var/lib/luna-integrity/last.json")
+    machine.fail("grep -q /api/alert /tmp/posts")
+
+    # An attacker adds an SSH key for root: the check names the file.
+    machine.succeed("mkdir -p /root/.ssh && echo 'ssh-ed25519 AAAA attacker' >> /root/.ssh/authorized_keys")
+    machine.succeed("systemctl start luna-integrity.service")
+    machine.wait_until_succeeds("grep -q '/api/alert Integrity: changed since the last deploy: /root/.ssh/authorized_keys' /tmp/posts")
+
+    # The brief: one notice, with the problem in it.
+    machine.succeed("systemctl start luna-security-brief.service")
+    machine.wait_until_succeeds("grep -q '/api/notice \\*\\*Security brief' /tmp/posts")
+    out = machine.succeed("grep /api/notice /tmp/posts")
+    assert "Integrity: PROBLEMS" in out, out
+    assert "nixpkgs:" in out and "Disk:" in out, out
+    print(out)
   '';
 }
 #+end_src
@@ -13676,7 +13953,7 @@ SSH_KEY   ?= $(HOME)/.ssh/luna_ed25519
 BOOTSTRAP := $(HOME)/.local/state/luna/bootstrap
 DEV       := nix develop $(FLAKE) --command
 
-.PHONY: help tangle check build install deploy host-key forget-host-key secrets matrix-users money-upload logs web-logs web-lock web-vm-test egress-vm-test sentry-vm-test deps-audit audit
+.PHONY: help tangle check build install deploy host-key forget-host-key secrets matrix-users money-upload logs web-logs web-lock web-vm-test egress-vm-test sentry-vm-test integrity-vm-test verify deps-audit audit
 
 help:
 	@echo "tangle           Make the build files from $(ORG)."
@@ -13695,6 +13972,8 @@ help:
 	@echo "web-vm-test      Run the luna-web VM test. The test needs KVM."
 	@echo "egress-vm-test   Run the VM test of the outbound allowlist. The test needs KVM."
 	@echo "sentry-vm-test   Run the VM test of the alerts. The test needs KVM."
+	@echo "integrity-vm-test Run the VM test of the integrity check and the brief."
+	@echo "verify           Make sure that luna runs the system that this tree builds."
 	@echo "deps-audit       Show retired Hex packages and security advisories."
 	@echo "audit            Show the end of the audit log."
 
@@ -13780,6 +14059,23 @@ egress-vm-test:
 sentry-vm-test:
 	nix build --impure --no-link --print-build-logs --expr \
 	  '(builtins.getFlake "$(FLAKE)").inputs.nixpkgs.legacyPackages.x86_64-linux.callPackage $(abspath tests/sentry-vm.nix) { }'
+
+integrity-vm-test:
+	nix build --impure --no-link --print-build-logs --expr \
+	  '(builtins.getFlake "$(FLAKE)").inputs.nixpkgs.legacyPackages.x86_64-linux.callPackage $(abspath tests/integrity-vm.nix) { }'
+
+# The check from the laptop (B3). A root attacker on luna can change the checks
+# on luna, but not this build on the laptop. The tree must be the deployed commit.
+verify:
+	expected="$$(nix build $(FLAKE)#nixosConfigurations.$(HOST).config.system.build.toplevel --no-link --print-out-paths)"
+	running="$$(ssh root@$(HOST) readlink -f /run/current-system)"
+	if [ "$$expected" = "$$running" ]; then
+	  echo "luna runs the expected system: $$running"
+	else
+	  echo "MISMATCH. Expected: $$expected"
+	  echo "          Running:  $$running"
+	  exit 1
+	fi
 
 # mix hex.audit reads the advisories from hex.pm, so it needs the network.
 deps-audit:

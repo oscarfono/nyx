@@ -16,10 +16,30 @@ defmodule LunaCore.Alerts do
   @doc "Sends one alert. The text is one line from luna-sentry."
   def alert(server \\ __MODULE__, text), do: GenServer.call(server, {:alert, text})
 
-  @impl true
-  def init(opts), do: {:ok, %{opts: opts, sent: [], paused: false}}
+  @doc """
+  Sends one long notice, for example the daily security brief (B4). The text
+  keeps its lines. The server sends at most 5 notices in each hour.
+  """
+  def notice(server \\ __MODULE__, text), do: GenServer.call(server, {:notice, text})
 
   @impl true
+  def init(opts), do: {:ok, %{opts: opts, sent: [], paused: false, notices: []}}
+
+  @impl true
+  def handle_call({:notice, text}, _from, state) do
+    now = System.monotonic_time(:millisecond)
+    recent = Enum.filter(state.notices, &(now - &1 < @window_ms))
+    text = String.slice(text, 0, 4000)
+    LunaCore.Audit.write(Keyword.fetch!(state.opts, :audit), "notice", %{chars: String.length(text)})
+
+    if length(recent) < 5 do
+      Keyword.fetch!(state.opts, :send).(text)
+      {:reply, :sent, %{state | notices: [now | recent]}}
+    else
+      {:reply, :logged, %{state | notices: recent}}
+    end
+  end
+
   def handle_call({:alert, text}, _from, state) do
     now = System.monotonic_time(:millisecond)
     recent = Enum.filter(state.sent, &(now - &1 < @window_ms))
