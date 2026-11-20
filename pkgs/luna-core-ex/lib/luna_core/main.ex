@@ -31,7 +31,8 @@ defmodule LunaCore.Main do
       api_key: config.anthropic_api_key, model: config.model, effort: config.effort, zone: zone, audit: audit
     ] ++ Map.get(config, :agent_opts, [])
 
-    base_tools = Tools.memory_tools(Memory, audit, fn -> DateTime.now!(zone) end)
+    roam = %{root: config.memory_dir, memory: Memory, audit: audit, now: fn -> DateTime.now!(zone) end}
+    base_tools = Tools.memory_tools(Memory, audit, fn -> DateTime.now!(zone) end) ++ LunaCore.Roam.Tools.tools(roam)
     money_tools = if money, do: Money.tools(money), else: []
 
     [
@@ -49,6 +50,7 @@ defmodule LunaCore.Main do
          money: if(money, do: {Money, money}, else: nil),
          settings: %{model: config.model, money: config.money_enabled, wise_mode: wise.mode, wise_sandbox: wise.sandbox},
          memory_root: config.memory_dir,
+         roam_root: config.memory_dir,
          started: DateTime.utc_now()
        ]},
       {Matrix.Bot,

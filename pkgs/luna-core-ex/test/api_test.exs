@@ -72,6 +72,16 @@ defmodule LunaCore.ApiTest do
     assert {400, _} = call(core, :post, "/api/approvals/abc/delete", %{})
   end
 
+  test "the memory graph has titles and links, and no note text", %{core: core, tmp: tmp} do
+    File.mkdir_p!(Path.join(tmp, "roam"))
+    File.write!(Path.join(tmp, "roam/a.org"), ":PROPERTIES:\n:ID: 11111111-2222-4333-8444-555555555555\n:END:\n#+title: A\nSecret text. [[id:22222222-2222-4333-8444-555555555555][B]]\n")
+    File.write!(Path.join(tmp, "roam/b.org"), ":PROPERTIES:\n:ID: 22222222-2222-4333-8444-555555555555\n:END:\n#+title: B\n")
+    {200, graph} = call(Keyword.put(core, :roam_root, tmp), :get, "/api/memory/graph")
+    assert Enum.map(graph["nodes"], & &1["title"]) == ["A", "B"]
+    assert graph["links"] == [%{"source" => "11111111-2222-4333-8444-555555555555", "target" => "22222222-2222-4333-8444-555555555555"}]
+    refute Jason.encode!(graph) =~ "Secret"
+  end
+
   test "money is off by default", %{core: core} do
     {200, body} = call(core, :get, "/api/money")
     assert body["text"] =~ "Money is off"

@@ -73,6 +73,15 @@ defmodule LunaCore.Api do
     end
   end
 
+  # The long-term memory graph, for the Memory panel. Titles, tags and links only:
+  # the page reads no note text. The text of a money note stays on luna.
+  get "/api/memory/graph" do
+    case conn.assigns.core[:roam_root] do
+      nil -> reply(conn, 200, %{nodes: [], links: []})
+      root -> reply(conn, 200, LunaCore.Roam.graph(LunaCore.Roam.index(root)))
+    end
+  end
+
   get "/api/money" do
     case conn.assigns.core[:money] do
       nil -> reply(conn, 200, %{text: "Money is off. Refer to 'The gate for phase 2' in LUNA.org."})
