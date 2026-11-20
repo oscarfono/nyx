@@ -10,7 +10,7 @@
 # It evaluates and builds and does not switch, and it names any option it does
 # not recognise. Run it before the box is worth anything.
 
-{ config, pkgs, lib, inputs, username, fullName, email, ... }:
+{ config, pkgs, lib, inputs, username, fullName, email, modulesPath, ... }:
 
 # The server. The machine that works, while the T490 keeps the keys.
 #
@@ -19,6 +19,19 @@
 # this file."
 {
   imports = [
+    # A rented KVM guest, and this line is not optional. It brings the virtio
+    # disk and network drivers into the INITRD, turns on DHCP, and gives the
+    # machine a clean ACPI shutdown path. Without it a hardened system can
+    # install perfectly and then come up unable to find its own disk or its
+    # network — because the installer's initrd carries drivers that the
+    # installed system does not. Every published cloud recipe for NixOS on a
+    # droplet or a cloud VM includes it, and its absence here was an omission
+    # rather than a decision.
+    #
+    # It matters more, not less, as the providers change: Vultr, then DigitalOcean.
+    # The profile is written for exactly this class of machine.
+    "${modulesPath}/profiles/qemu-guest.nix"
+
     # disko turns ./disko.nix into filesystems and into
     # boot.initrd.luks.devices. Nothing about LUKS is hand-written here, which
     # is deliberate — one description, one place it can be wrong.

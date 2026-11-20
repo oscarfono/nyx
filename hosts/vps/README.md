@@ -240,3 +240,76 @@ input has no revision in `flake.lock`, the exact `nixos-anywhere` flag for suppl
 LUKS passphrase is still to be read from `--help` on the machine that runs it, and the
 GRUB-hybrid layout is taken from disko's example rather than from a completed install on
 this box.
+
+## 20 November 2026, later — the provider is DigitalOcean now
+
+Vultr kept failing, so the target moved to **DigitalOcean**. Nothing about the design
+changes: the same Debian image, the same `nixos-anywhere` from the T490, the same disk
+layout, the same encryption. Four things are worth writing down, and one of them makes
+an earlier change load-bearing rather than cautious.
+
+**1. The GRUB hybrid layout is now required, not belt-and-braces.** DigitalOcean's own
+custom-image documentation says, in its limits section: *"UEFI boot is not supported.
+Custom images must boot using BIOS."* and *"ISO images are not currently supported."* So
+a Droplet is a **BIOS** machine and there is no ISO path to hide behind. The change made
+earlier today — GRUB with `efiSupport` and `efiInstallAsRemovable` plus the 1 MiB `EF02`
+bios_grub partition — is the thing that makes this box boot at all. Had it been left as
+systemd-boot on EFI, the install would have completed and the machine would not have
+come back, which is precisely what the old comment warned about.
+
+**2. The guest profile was missing and is now imported.** `hosts/vps/default.nix` did not
+import `${modulesPath}/profiles/qemu-guest.nix`. It does now. That profile brings the
+virtio disk and network drivers into the **initrd** and turns on DHCP, and without it a
+hardened system can install cleanly and then come up unable to find its own disk or its
+network, because the installer's initrd carries drivers the installed system does not.
+Published accounts of `nixos-anywhere` on DigitalOcean specifically report having to sort
+out networking by hand; DHCP plus this profile is the answer to that, and the Recovery
+Console is the fallback if it still goes wrong. **The disk device stays `/dev/vda`**,
+which is what a DigitalOcean virtio droplet uses.
+
+**3. The shape changed, and not in our favour.** DigitalOcean's prices, from its own
+pricing page:
+
+| plan | vCPU | RAM | disk | $/mo | note |
+|---|---|---|---|---|---|
+| General Purpose (**dedicated**) | 4 | 16 GB | **50 GiB** | **$126** | NVMe on the Premium variant, 10 Gbps out |
+| General Purpose (dedicated) | 8 | 32 GB | 100 GiB | $252 | |
+| Basic (shared) | 8 | 16 GiB | 320 GiB | **$96** | shared CPU, regular SSD |
+| Basic (shared) | 4 | 8 GiB | 160 GiB | **$48** | |
+
+The comparison is worth stating plainly: Vultr's `vx1-g-4c-16g-240s` was **$113.83** for
+4 dedicated vCPU / 16 GB / **240 GB NVMe**. DigitalOcean's nearest equivalent is **$126
+for 4 vCPU / 16 GB / 50 GiB** — more money for a fifth of the disk. Disk is the resource
+this box actually grows into: `/nix`, a build cache and the agent's working copies. So
+the desk's read: **the $96 shared 8 vCPU / 16 GiB / 320 GiB is the better buy for this
+workload** (a chat agent, a Matrix hub, occasional Nix builds — bursty, not sustained),
+and if dedicated cores are wanted then it is $126 and a Volume later. DigitalOcean also
+now offers **v5 configurable droplets** where vCPU, memory and storage are chosen
+separately, which would be the ideal shape; its rates are not published in the tables
+that were read, so the configurator's live running total is the authority.
+
+**4. THE SAME TRAP, AND IT IS THE ONE THAT BURNED US.** DigitalOcean sets **resource
+limits per team**, and a new account starts low:
+
+| tier | droplets | what it can create |
+|---|---|---|
+| Tier 1 | 3 | Basic shared CPU, **up to $48** |
+| Tier 2 | 10 | Basic shared up to $56, some dedicated up to $84 |
+| Tier 3 | 15 | all Basic shared, dedicated up to $163 |
+| Tier 4 | 25 | all droplets |
+| Tier 5 | 100 | all droplets |
+
+A brand-new account may therefore **refuse the $96 or $126 droplet** until there is
+billing history or a support ticket, which is exactly the shape of the Vultr failure.
+The two ways through it: order the **$48 Basic (8 GiB / 4 vCPU / 160 GiB)**, which fits
+Tier 1 and is genuinely enough to start — and lodge the limit-increase ticket *before*
+the bigger box is needed rather than on the day it is. Community reports are mixed on
+how readily DO grants increases to accounts with no billing history.
+
+**Also settled: no agent product.** DigitalOcean's "agent" offering is **Gradient**, a
+hosted agent builder and serverless inference layer billed per token. It is not this.
+Our agent is Hermes running on a machine we own, described by a flake, backed up by
+restic to our own bucket, with our own sandbox, tools and cron. A hosted agent runtime
+would mean renting someone else's process, paying by the token, and giving up the
+rebuild, the backup and the key custody in one move. **A plain Droplet with Debian 12,
+and not a Marketplace one-click image either** — we replace the operating system.
