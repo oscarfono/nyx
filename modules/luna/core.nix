@@ -173,7 +173,9 @@ in
       RestartSteps = 5;
       RestartMaxDelaySec = 600;
 
-      ReadWritePaths = [ stateDir "/run/luna-api" ];
+      # "-": the path can be absent. systemd sets up this namespace for the
+      # "+" command too, and that command makes /run/luna-api.
+      ReadWritePaths = [ stateDir "-/run/luna-api" ];
       ProtectSystem = "strict";
       ProtectHome = true;
       PrivateTmp = true;
