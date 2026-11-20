@@ -28,6 +28,7 @@ defmodule LunaCore.Claude do
         max_retries: Keyword.get(opts, :max_retries, 2),
         retry_log_level: false
       )
+      |> Req.merge(Keyword.get_lazy(opts, :http, &LunaCore.Http.options/0))
 
     case Req.post(request) do
       {:ok, %{status: 200, body: message}} -> {:ok, message}

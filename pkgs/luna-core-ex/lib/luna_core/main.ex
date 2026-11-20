@@ -41,6 +41,7 @@ defmodule LunaCore.Main do
     [
       {Memory, root: config.memory_dir, audit: audit, remote: Map.get(config, :remote, true)},
       {Approvals, dir: config.approvals_dir, audit: audit},
+      {LunaCore.Alerts, audit: audit, send: &Matrix.Bot.send_owner/1},
       # The chat agent gets the payment tool after the approvals start. Refer to init_payments/1.
       {Agent, agent_opts ++ [tools: base_tools ++ money_tools]},
       Supervisor.child_spec({Task, fn -> init_payments(payments) end}, id: :init_payments),
@@ -55,6 +56,7 @@ defmodule LunaCore.Main do
          memory_root: config.memory_dir,
          roam_root: config.memory_dir,
          glance: fn -> LunaCore.Glance.build(quick) end,
+         alerts: LunaCore.Alerts,
          started: DateTime.utc_now()
        ]},
       {Matrix.Bot,

@@ -10,11 +10,9 @@ defmodule LunaCore.Telegram do
   def nudge(_token, nil, _text, _audit, _base_url), do: :ok
 
   def nudge(token, chat, text, audit, base_url) do
-    case Req.post(base_url <> "/bot#{token}/sendMessage",
-           json: %{chat_id: chat, text: text},
-           retry: false,
-           receive_timeout: 15_000
-         ) do
+    opts = [json: %{chat_id: chat, text: text}, retry: false, receive_timeout: 15_000] ++ LunaCore.Http.options()
+
+    case Req.post(base_url <> "/bot#{token}/sendMessage", opts) do
       {:ok, %{status: 200}} -> :ok
       {:ok, %{status: status}} -> LunaCore.Audit.write(audit, "telegram.error", %{error: "status #{status}"})
       {:error, exception} -> LunaCore.Audit.write(audit, "telegram.error", %{error: inspect(exception.__struct__)})

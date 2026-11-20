@@ -87,6 +87,15 @@ defmodule LunaCore.ApiTest do
     assert {200, %{"roster" => %{"day" => 11}, "money" => %{"off" => true}}} = call(core, :get, "/api/glance")
   end
 
+  test "an alert from luna-sentry", %{core: core, tmp: tmp} do
+    test = self()
+    {:ok, alerts} = LunaCore.Alerts.start_link(audit: Path.join(tmp, "a.jsonl"), send: &send(test, {:sent, &1}), name: nil)
+    core = Keyword.put(core, :alerts, alerts)
+    assert {200, %{"result" => "sent"}} = call(core, :post, "/api/alert", %{text: "SSH login"})
+    assert_received {:sent, "**Blue team:** SSH login"}
+    assert {400, _} = call(core, :post, "/api/alert", %{text: ""})
+  end
+
   test "money is off by default", %{core: core} do
     {200, body} = call(core, :get, "/api/money")
     assert body["text"] =~ "Money is off"

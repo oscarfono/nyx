@@ -144,7 +144,8 @@ defmodule LunaCore.Payments do
   defp wise(cfg, method, path, body \\ nil) do
     opts = cfg.wise || raise(PaymentError, "No Wise token. Add wise-api-token to the secrets.")
     base = opts[:base_url] || if(cfg.settings.sandbox, do: "https://api.wise-sandbox.com", else: "https://api.wise.com")
-    request = [method: method, url: base <> path, headers: [{"authorization", "Bearer " <> opts[:token]}], retry: false, receive_timeout: 30_000]
+    request = [method: method, url: base <> path, headers: [{"authorization", "Bearer " <> opts[:token]}], retry: false, receive_timeout: 30_000] ++
+              LunaCore.Http.options()
     request = if body, do: Keyword.put(request, :json, body), else: request
 
     case Req.request(request) do

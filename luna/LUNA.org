@@ -30,7 +30,7 @@ The next tangle overwrites the tangled files.
 | =pkgs/luna-core-ex/= | The Elixir core and its tests (E5)   |
 | =luna/memory-seed/=  | The first memory files               |
 | =luna/tailscale/=    | The Tailscale policy                 |
-| =luna/tests/=        | The VM test of the web app           |
+| =luna/tests/=        | The VM tests of the web app and the egress |
 | =luna/Makefile=      | The install and deploy commands      |
 
 Two nyx files are not tangled.
@@ -766,6 +766,8 @@ in
     ../../modules/luna/core.nix
     ../../modules/luna/web.nix
     ../../modules/luna/voice.nix
+    ../../modules/luna/egress.nix
+    ../../modules/luna/sentry.nix
   ];
 
   _module.args = { inherit site secretsReady; };
@@ -5080,6 +5082,7 @@ defmodule LunaCore.Main do
     [
       {Memory, root: config.memory_dir, audit: audit, remote: Map.get(config, :remote, true)},
       {Approvals, dir: config.approvals_dir, audit: audit},
+      {LunaCore.Alerts, audit: audit, send: &Matrix.Bot.send_owner/1},
       # The chat agent gets the payment tool after the approvals start. Refer to init_payments/1.
       {Agent, agent_opts ++ [tools: base_tools ++ money_tools]},
       Supervisor.child_spec({Task, fn -> init_payments(payments) end}, id: :init_payments),
@@ -5094,6 +5097,7 @@ defmodule LunaCore.Main do
          memory_root: config.memory_dir,
          roam_root: config.memory_dir,
          glance: fn -> LunaCore.Glance.build(quick) end,
+         alerts: LunaCore.Alerts,
          started: DateTime.utc_now()
        ]},
       {Matrix.Bot,
@@ -5731,6 +5735,15 @@ defmodule LunaCore.Api do
     end
   end
 
+  # An alert from luna-sentry (blue team, B2). The text goes to the owner room.
+  post "/api/alert" do
+    case {conn.assigns.core[:alerts], conn.body_params["text"]} do
+      {nil, _} -> reply(conn, 404, %{error: "No alerts here."})
+      {_, text} when not is_binary(text) or text == "" -> reply(conn, 400, %{error: "Send a text."})
+      {alerts, text} -> reply(conn, 200, %{result: LunaCore.Alerts.alert(alerts, text)})
+    end
+  end
+
   get "/api/money" do
     case conn.assigns.core[:money] do
       nil -> reply(conn, 200, %{text: "Money is off. Refer to 'The gate for phase 2' in LUNA.org."})
@@ -5864,6 +5877,7 @@ defmodule LunaCore.Claude do
         max_retries: Keyword.get(opts, :max_retries, 2),
         retry_log_level: false
       )
+      |> Req.merge(Keyword.get_lazy(opts, :http, &LunaCore.Http.options/0))
 
     case Req.post(request) do
       {:ok, %{status: 200, body: message}} -> {:ok, message}
@@ -7686,7 +7700,8 @@ defmodule LunaCore.Payments do
   defp wise(cfg, method, path, body \\ nil) do
     opts = cfg.wise || raise(PaymentError, "No Wise token. Add wise-api-token to the secrets.")
     base = opts[:base_url] || if(cfg.settings.sandbox, do: "https://api.wise-sandbox.com", else: "https://api.wise.com")
-    request = [method: method, url: base <> path, headers: [{"authorization", "Bearer " <> opts[:token]}], retry: false, receive_timeout: 30_000]
+    request = [method: method, url: base <> path, headers: [{"authorization", "Bearer " <> opts[:token]}], retry: false, receive_timeout: 30_000] ++
+              LunaCore.Http.options()
     request = if body, do: Keyword.put(request, :json, body), else: request
 
     case Req.request(request) do
@@ -8026,11 +8041,9 @@ defmodule LunaCore.Telegram do
   def nudge(_token, nil, _text, _audit, _base_url), do: :ok
 
   def nudge(token, chat, text, audit, base_url) do
-    case Req.post(base_url <> "/bot#{token}/sendMessage",
-           json: %{chat_id: chat, text: text},
-           retry: false,
-           receive_timeout: 15_000
-         ) do
+    opts = [json: %{chat_id: chat, text: text}, retry: false, receive_timeout: 15_000] ++ LunaCore.Http.options()
+
+    case Req.post(base_url <> "/bot#{token}/sendMessage", opts) do
       {:ok, %{status: 200}} -> :ok
       {:ok, %{status: status}} -> LunaCore.Audit.write(audit, "telegram.error", %{error: "status #{status}"})
       {:error, exception} -> LunaCore.Audit.write(audit, "telegram.error", %{error: inspect(exception.__struct__)})
@@ -8178,6 +8191,15 @@ defmodule LunaCore.ApiTest do
   test "the glance gives the readouts", %{core: core} do
     core = Keyword.put(core, :glance, fn -> %{roster: %{day: 11}, money: %{off: true}} end)
     assert {200, %{"roster" => %{"day" => 11}, "money" => %{"off" => true}}} = call(core, :get, "/api/glance")
+  end
+
+  test "an alert from luna-sentry", %{core: core, tmp: tmp} do
+    test = self()
+    {:ok, alerts} = LunaCore.Alerts.start_link(audit: Path.join(tmp, "a.jsonl"), send: &send(test, {:sent, &1}), name: nil)
+    core = Keyword.put(core, :alerts, alerts)
+    assert {200, %{"result" => "sent"}} = call(core, :post, "/api/alert", %{text: "SSH login"})
+    assert_received {:sent, "**Blue team:** SSH login"}
+    assert {400, _} = call(core, :post, "/api/alert", %{text: ""})
   end
 
   test "money is off by default", %{core: core} do
@@ -9985,6 +10007,475 @@ defmodule LunaCore.RoamTest do
 
   test "the UUID is version 4", do: assert(Roam.uuid() =~ ~r/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
 end
+#+end_src
+
+* Blue team
+
+LUNA is not impenetrable. The network side is tight: the firewall accepts no TCP from the internet,
+and the page needs the Tailscale login of Coops. The larger risks are other:
+1. LUNA reads text that strangers write (web pages now, email later). Prompt injection is the main threat.
+2. The VPS disk is not encrypted, and the provider can reach the host.
+3. A device of Coops that is logged in to Tailscale can reach luna as root over Tailscale SSH.
+
+The blue team is a set of controls that run all the time. It comes before any email account.
+
+| Part | Control                                                                 | State |
+|------+-------------------------------------------------------------------------+-------|
+| B1   | The outbound allowlist: a filtering proxy, and no direct internet for the core and the web app | Done |
+| B2   | Alerts to Matrix: SSH sessions, failed units, sandbox kills, refused egress | Done |
+| B3   | Integrity: the running system and the Nix store                         | Next  |
+| B4   | A daily security brief, made in code                                    |       |
+| B5   | A re-login check for Tailscale SSH ("check" in place of "accept"). Coops decides. | |
+| B6   | The fixed shape of email: read-only, untrusted text, no web after a read, no send | |
+
+** B1: the outbound allowlist
+
+*Why.* If an attacker controls LUNA, for example through a prompt injection, the attacker wants to send
+data out. The allowlist stops that: the core can reach the hosts in the list, and no other host.
+
+*How.*
+- tinyproxy listens on =127.0.0.1:8888=. It refuses each host that is not in the allowlist
+  (=FilterDefaultDeny=), and each CONNECT port but 443. It logs each refusal to the journal.
+- The allowlist comes from the site values: =api.anthropic.com= always, =api.telegram.org= when
+  =telegram= is true, and the Wise API when the Wise float can make a transfer.
+- systemd gives =luna-core= and =luna-web= =IPAddressDeny=any= and =IPAddressAllow=localhost=.
+  The kernel refuses each direct connection, also when an attacker controls the process.
+- The core sends each call to the internet through the proxy (=LunaCore.Http=, =LUNA_HTTPS_PROXY=).
+  The Python core reads =HTTPS_PROXY=, so a rollback to Python keeps the control.
+- =luna-web= needs no internet: PostgreSQL and the core are unix sockets, and the voice servers
+  are on =127.0.0.1=.
+
+*Test.* =make egress-vm-test= starts the module in a VM. It makes sure that the proxy refuses a host
+that is not in the list and a port that is not 443, that a host in the list passes the filter, and
+that the kernel refuses a direct connection from the sandbox of the core.
+
+#+begin_src nix :tangle ../modules/luna/egress.nix
+{ lib, pkgs, site, ... }:
+let
+  # The only hosts that LUNA may reach on the internet (blue team, B1).
+  # Wise is in the list only when the Wise float can make a transfer.
+  wiseHost = if site.wise.sandbox then "api.wise-sandbox.com" else "api.wise.com";
+  allowed =
+    [ "api.anthropic.com" ]
+    ++ lib.optional site.telegram "api.telegram.org"
+    ++ lib.optional (lib.elem site.wise.mode [ "draft" "auto" ]) wiseHost;
+
+  # One extended regular expression for each host, matched on the whole name.
+  filter = pkgs.writeText "luna-egress-allowlist"
+    (lib.concatMapStrings (host: "^${lib.replaceStrings [ "." ] [ "\\." ] host}$\n") allowed);
+
+  proxy = "http://127.0.0.1:8888";
+  noInternet = {
+    IPAddressDeny = "any";
+    IPAddressAllow = "localhost";
+  };
+in
+{
+  # The filtering proxy. It refuses each host that is not in the allowlist,
+  # and each port but 443. Each refusal goes to the journal (B2 watches it).
+  services.tinyproxy = {
+    enable = true;
+    settings = {
+      Listen = "127.0.0.1";
+      Port = 8888;
+      Allow = "127.0.0.1";
+      Filter = filter;
+      FilterType = "ere";
+      FilterDefaultDeny = true;
+      FilterURLs = false;
+      ConnectPort = 443;
+      DisableViaHeader = true;
+      Syslog = true;
+      LogLevel = "Connect";
+      MaxClients = 50;
+    };
+  };
+
+  systemd.services.tinyproxy.serviceConfig = {
+    ProtectSystem = "strict";
+    ProtectHome = true;
+    PrivateTmp = true;
+    PrivateDevices = true;
+    NoNewPrivileges = true;
+    CapabilityBoundingSet = "";
+    RestrictAddressFamilies = [ "AF_INET" "AF_INET6" "AF_UNIX" ];
+    SystemCallFilter = [ "@system-service" "~@privileged" ];
+  };
+
+  # The core goes to the internet through the proxy only. The kernel refuses
+  # each other connection, also when an attacker controls the core.
+  systemd.services.luna-core = {
+    after = [ "tinyproxy.service" ];
+    wants = [ "tinyproxy.service" ];
+    environment = {
+      LUNA_HTTPS_PROXY = proxy;
+      # For the Python core, if site.core is "python": httpx reads these.
+      HTTPS_PROXY = proxy;
+      NO_PROXY = "127.0.0.1,localhost";
+    };
+    serviceConfig = noInternet;
+  };
+
+  # The web app needs no internet at all: PostgreSQL and the core are unix
+  # sockets, and the voice servers are on 127.0.0.1.
+  systemd.services.luna-web.serviceConfig = noInternet;
+}
+#+end_src
+
+#+begin_src elixir :tangle ../pkgs/luna-core-ex/lib/luna_core/http.ex
+defmodule LunaCore.Http do
+  @moduledoc """
+  The outbound path of the core (blue team, B1). Each call to the internet
+  (Anthropic, Wise, Telegram) goes through the filtering proxy on luna.
+  systemd stops each direct connection: the unit allows localhost only.
+
+  LUNA_HTTPS_PROXY is the proxy, for example http://127.0.0.1:8888.
+  Without it (the tests), the calls go direct.
+  """
+
+  @doc "The Req options for a call to the internet."
+  def options(env \\ System.get_env()) do
+    case Map.get(env, "LUNA_HTTPS_PROXY") do
+      value when value in [nil, ""] ->
+        []
+
+      url ->
+        uri = URI.parse(url)
+        [connect_options: [proxy: {String.to_existing_atom(uri.scheme), uri.host, uri.port, []}]]
+    end
+  end
+end
+#+end_src
+
+#+begin_src elixir :tangle ../pkgs/luna-core-ex/test/http_test.exs
+defmodule LunaCore.HttpTest do
+  use ExUnit.Case, async: true
+
+  alias LunaCore.{Claude, FakeClaude, Http}
+
+  test "no proxy without LUNA_HTTPS_PROXY" do
+    assert Http.options(%{}) == []
+  end
+
+  test "the proxy from LUNA_HTTPS_PROXY" do
+    assert Http.options(%{"LUNA_HTTPS_PROXY" => "http://127.0.0.1:8888"}) ==
+             [connect_options: [proxy: {:http, "127.0.0.1", 8888, []}]]
+  end
+
+  test "a Claude call goes through the proxy, not to the host" do
+    # The fake is the proxy here. The target host does not exist, so only the
+    # proxy can answer.
+    fake = FakeClaude.start([{200, FakeClaude.message("end_turn", [FakeClaude.text("via the proxy")])}])
+    %URI{port: port} = URI.parse(fake.base_url)
+
+    assert {:ok, %{"content" => [%{"text" => "via the proxy"}]}} =
+             Claude.create(%{"model" => "m"},
+               api_key: "k", base_url: "http://api.luna-test.invalid", max_retries: 0,
+               http: [connect_options: [proxy: {:http, "127.0.0.1", port, []}]])
+
+    assert [%{body: %{"model" => "m"}}] = FakeClaude.requests(fake)
+  end
+end
+#+end_src
+
+#+begin_src nix :tangle tests/egress-vm.nix
+# The VM test of modules/luna/egress.nix (blue team, B1). Run it with: make egress-vm-test
+{ testers }:
+
+testers.runNixOSTest {
+  name = "luna-egress";
+  node.specialArgs.site = { telegram = false; wise = { mode = "off"; sandbox = true; }; };
+  nodes.machine = { pkgs, ... }: {
+    imports = [ ../../modules/luna/egress.nix ];
+    environment.systemPackages = [ pkgs.curl ];
+    # Stand-ins for the units that egress.nix restricts.
+    systemd.services.luna-core.script = "sleep infinity";
+    systemd.services.luna-web.script = "sleep infinity";
+  };
+  testScript = ''
+    machine.wait_for_unit("tinyproxy.service")
+    machine.wait_for_open_port(8888)
+
+    # A host that is not in the allowlist: the proxy refuses it.
+    out = machine.succeed("curl -s -o /dev/null -w '%{http_connect}' -x http://127.0.0.1:8888 https://example.com || true")
+    assert "403" in out, f"example.com was not refused: {out}"
+
+    # A host in the allowlist passes the filter. The VM has no internet, so the
+    # proxy fails after the filter, with a code that is not 403.
+    out = machine.succeed("curl -s -o /dev/null -w '%{http_connect}' -x http://127.0.0.1:8888 https://api.anthropic.com || true")
+    assert "403" not in out, f"api.anthropic.com was refused by the filter: {out}"
+
+    # A port other than 443 is refused for CONNECT.
+    out = machine.succeed("curl -s -o /dev/null -w '%{http_connect}' -x http://127.0.0.1:8888 https://api.anthropic.com:8443 || true")
+    assert "403" in out, f"port 8443 was not refused: {out}"
+
+    # The sandbox of the core: the kernel refuses a direct connection.
+    # (For HTTPS through a proxy, curl gives the answer of the proxy in http_connect.)
+    out = machine.fail("systemd-run --wait --pipe -p IPAddressDeny=any -p IPAddressAllow=localhost curl -sS --max-time 5 http://10.0.2.2/ 2>&1")
+    # Through the proxy, from the same sandbox, the filter answers.
+    out = machine.succeed("systemd-run --wait --pipe -p IPAddressDeny=any -p IPAddressAllow=localhost curl -s -o /dev/null -w '%{http_connect}' -x http://127.0.0.1:8888 https://example.com || true")
+    assert "403" in out, out
+
+    # The refusal is in the journal, for the alerts of B2.
+    machine.succeed("journalctl -u tinyproxy --no-pager | grep -i 'filtered'")
+  '';
+}
+#+end_src
+
+** B2: alerts to Matrix
+
+=luna-sentry= follows the journal and sends an alert to the owner room for each of these events:
+
+| Event                         | The journal line                         | Window |
+|-------------------------------+------------------------------------------+--------|
+| A Tailscale SSH login         | tailscaled: =audit: SSH login: user=...= | 30 min for each user and device |
+| A unit that failed            | systemd: =<unit>: Failed with result '...'= | 10 min for each unit |
+| A process that seccomp killed | kernel: =audit: type=1326 ... exe=... syscall=...= | 10 min for each program |
+| A refusal of the egress proxy | tinyproxy: =... refused ...= (B1)        | 10 min for each line |
+
+An alert goes to =POST /api/alert= on the socket of the core. =LunaCore.Alerts= sends it to the owner
+room, at most 30 in each hour. The first alert over the limit sends one notice. Each alert also goes
+to the audit log.
+
+=luna-sentry= runs as a dynamic user in the groups =systemd-journal= (to read the journal) and
+=luna-api= (to reach the core). It has no network: =IPAddressDeny=any=, unix sockets only.
+
+*CAUTION:* The alerts go through the core. When =luna-core= is down, an alert cannot go out.
+=luna-sentry= then writes it to its own journal, and the daily brief (B4) shows it.
+
+*Test.* =make sentry-vm-test= starts the module with a fake core in a VM. It makes sure that an SSH
+login, a refusal of the proxy and a failed unit each give one alert, and that a second SSH login in
+the window gives no second alert. A seccomp kill needs the kernel audit of luna: test it there.
+
+#+begin_src nix :tangle ../modules/luna/sentry.nix
+{ pkgs, ... }:
+let
+  # luna-sentry (blue team, B2): it follows the journal and sends an alert to
+  # the owner room for each event below. One alert for each key in each window,
+  # so that a burst gives one alert. The core also limits alerts to 30 an hour.
+  sentry = pkgs.writeShellApplication {
+    name = "luna-sentry";
+    runtimeInputs = [ pkgs.systemd pkgs.jq pkgs.curl pkgs.coreutils ];
+    text = ''
+      socket=/run/luna-api/api.sock
+      declare -A last
+
+      # send KEY WINDOW-SECONDS TEXT
+      send() {
+        local now
+        now=$(date +%s)
+        if [ -n "''${last[$1]:-}" ] && [ $((now - last[$1])) -lt "$2" ]; then
+          return 0
+        fi
+        last[$1]=$now
+        if ! jq -n --arg t "$3" '{text: $t}' \
+          | curl -sS --max-time 10 --unix-socket "$socket" -H 'content-type: application/json' \
+              --data-binary @- -o /dev/null http://core/api/alert; then
+          echo "luna-sentry: the core did not take the alert: $3" >&2
+        fi
+      }
+
+      journalctl --follow --lines=0 --output=json \
+        | jq --unbuffered -r '[(.SYSLOG_IDENTIFIER // ""), (._TRANSPORT // ""), ((.MESSAGE // "") | tostring)] | @tsv' \
+        | while IFS=$'\t' read -r ident transport msg; do
+            # A Tailscale SSH login.
+            if [[ $ident == tailscaled && $msg =~ audit:\ SSH\ login:\ user=([^ ]+).*from=([^ ]+).*ts_user=([^ ]+).*node=([^ ]+) ]]; then
+              node=''${BASH_REMATCH[4]%%.*}
+              send "ssh:''${BASH_REMATCH[1]}:$node" 1800 \
+                "SSH login on luna: ''${BASH_REMATCH[1]}, from $node (''${BASH_REMATCH[3]}, ''${BASH_REMATCH[2]})."
+            # A unit that failed.
+            elif [[ $ident == systemd && $msg =~ ^([^:]+):\ Failed\ with\ result\ \'([^\']+)\' ]]; then
+              send "unit:''${BASH_REMATCH[1]}" 600 "''${BASH_REMATCH[1]} failed (''${BASH_REMATCH[2]})."
+            # A process that the seccomp filter of its unit killed.
+            elif [[ $transport == kernel && $msg == *type=1326* && $msg =~ exe=\"([^\"]+)\".*syscall=([0-9]+) ]]; then
+              exe=''${BASH_REMATCH[1]##*/}
+              send "seccomp:$exe" 600 "The sandbox killed $exe (syscall ''${BASH_REMATCH[2]})."
+            # A host or a port that the egress proxy refused (B1).
+            elif [[ $ident == tinyproxy && $msg =~ [Rr]efused ]]; then
+              detail=$(printf '%s' "$msg" | cut -c1-160)
+              send "egress:$detail" 600 "Egress refused: $detail"
+            fi
+          done
+    '';
+  };
+in
+{
+  systemd.services.luna-sentry = {
+    description = "LUNA blue team: alerts from the journal to the owner room";
+    after = [ "luna-core.service" ];
+    wantedBy = [ "multi-user.target" ];
+    serviceConfig = {
+      ExecStart = "${sentry}/bin/luna-sentry";
+      DynamicUser = true;
+      # Read the journal. Write to the socket of the core API.
+      SupplementaryGroups = [ "systemd-journal" "luna-api" ];
+      Restart = "always";
+      RestartSec = 10;
+
+      # No network: the core API is a unix socket.
+      IPAddressDeny = "any";
+      RestrictAddressFamilies = [ "AF_UNIX" ];
+      ProtectSystem = "strict";
+      ProtectHome = true;
+      PrivateTmp = true;
+      PrivateDevices = true;
+      NoNewPrivileges = true;
+      CapabilityBoundingSet = "";
+      ProtectKernelTunables = true;
+      ProtectKernelModules = true;
+      ProtectKernelLogs = true;
+      ProtectControlGroups = true;
+      ProtectClock = true;
+      ProtectHostname = true;
+      RestrictNamespaces = true;
+      RestrictRealtime = true;
+      RestrictSUIDSGID = true;
+      LockPersonality = true;
+      SystemCallArchitectures = "native";
+      SystemCallFilter = [ "@system-service" "~@privileged" ];
+    };
+  };
+}
+#+end_src
+
+#+begin_src elixir :tangle ../pkgs/luna-core-ex/lib/luna_core/alerts.ex
+defmodule LunaCore.Alerts do
+  @moduledoc """
+  The alerts of the blue team (B2). luna-sentry watches the journal and
+  posts each alert to the core API; this server sends it to the owner room.
+
+  The server sends at most :max alerts in each hour (default 30). The first
+  alert over the limit sends one notice; the next alerts go to the audit log only.
+  Options: :send (a function of one text), :audit, :max, :name.
+  """
+  use GenServer
+
+  @window_ms :timer.hours(1)
+
+  def start_link(opts), do: GenServer.start_link(__MODULE__, opts, name: Keyword.get(opts, :name, __MODULE__))
+
+  @doc "Sends one alert. The text is one line from luna-sentry."
+  def alert(server \\ __MODULE__, text), do: GenServer.call(server, {:alert, text})
+
+  @impl true
+  def init(opts), do: {:ok, %{opts: opts, sent: [], paused: false}}
+
+  @impl true
+  def handle_call({:alert, text}, _from, state) do
+    now = System.monotonic_time(:millisecond)
+    recent = Enum.filter(state.sent, &(now - &1 < @window_ms))
+    text = text |> String.replace(~r/[\r\n]+/, " ") |> String.slice(0, 400)
+    LunaCore.Audit.write(Keyword.fetch!(state.opts, :audit), "alert", %{text: text})
+
+    cond do
+      length(recent) < Keyword.get(state.opts, :max, 30) ->
+        Keyword.fetch!(state.opts, :send).("**Blue team:** " <> text)
+        {:reply, :sent, %{state | sent: [now | recent], paused: false}}
+
+      not state.paused ->
+        Keyword.fetch!(state.opts, :send).("**Blue team:** too many alerts in one hour. The next ones go to the audit log only.")
+        {:reply, :paused, %{state | sent: recent, paused: true}}
+
+      true ->
+        {:reply, :logged, %{state | sent: recent}}
+    end
+  end
+end
+#+end_src
+
+#+begin_src elixir :tangle ../pkgs/luna-core-ex/test/alerts_test.exs
+defmodule LunaCore.AlertsTest do
+  use ExUnit.Case, async: true
+
+  alias LunaCore.Alerts
+
+  @moduletag :tmp_dir
+
+  setup %{tmp_dir: tmp} do
+    test = self()
+    {:ok, alerts} = Alerts.start_link(audit: Path.join(tmp, "audit.jsonl"), send: &send(test, {:sent, &1}), max: 2, name: nil)
+    %{alerts: alerts, tmp: tmp}
+  end
+
+  test "an alert goes to the owner, on one line", %{alerts: a} do
+    assert Alerts.alert(a, "luna-core failed\n(core-dump)") == :sent
+    assert_received {:sent, "**Blue team:** luna-core failed (core-dump)"}
+  end
+
+  test "over the limit: one notice, then the audit log only", %{alerts: a, tmp: tmp} do
+    assert Alerts.alert(a, "one") == :sent
+    assert Alerts.alert(a, "two") == :sent
+    assert Alerts.alert(a, "three") == :paused
+    assert Alerts.alert(a, "four") == :logged
+    assert_received {:sent, "**Blue team:** one"}
+    assert_received {:sent, "**Blue team:** two"}
+    assert_received {:sent, "**Blue team:** too many alerts" <> _}
+    refute_received {:sent, _}
+    assert File.read!(Path.join(tmp, "audit.jsonl")) =~ "four"
+  end
+end
+#+end_src
+
+#+begin_src nix :tangle tests/sentry-vm.nix
+# The VM test of modules/luna/sentry.nix (blue team, B2). Run it with: make sentry-vm-test
+{ testers }:
+
+testers.runNixOSTest {
+  name = "luna-sentry";
+  nodes.machine = { pkgs, ... }: {
+    imports = [ ../../modules/luna/sentry.nix ];
+    users.groups.luna-api = { };
+    # A fake core API on the unix socket: it writes the body of each POST to /tmp/alerts.
+    systemd.services.fake-core = {
+      wantedBy = [ "multi-user.target" ];
+      before = [ "luna-sentry.service" ];
+      script = ''
+        mkdir -p /run/luna-api
+        rm -f /run/luna-api/api.sock
+        exec ${pkgs.python3}/bin/python3 ${pkgs.writeText "fake-core.py" ''
+          import http.server, os, socketserver
+          class Handler(http.server.BaseHTTPRequestHandler):
+              def do_POST(self):
+                  body = self.rfile.read(int(self.headers["Content-Length"]))
+                  with open("/tmp/alerts", "ab") as f:
+                      f.write(body + b"\n")
+                  self.send_response(200)
+                  self.send_header("Content-Length", "2")
+                  self.end_headers()
+                  self.wfile.write(b"{}")
+              def address_string(self):
+                  return "unix"
+          class Server(socketserver.UnixStreamServer):
+              pass
+          server = Server("/run/luna-api/api.sock", Handler)
+          os.chmod("/run/luna-api/api.sock", 0o666)
+          server.serve_forever()
+        ''}
+      '';
+    };
+    systemd.services.luna-sentry.after = [ "fake-core.service" ];
+    environment.systemPackages = [ pkgs.util-linux ];
+  };
+  testScript = ''
+    machine.wait_for_unit("fake-core.service")
+    machine.wait_for_unit("luna-sentry.service")
+    machine.sleep(2)
+
+    machine.succeed("logger -t tailscaled 'audit: SSH login: user=root uid=0 from=100.88.0.9 ts_user=coops@example.com node=phone.example.ts.net.'")
+    machine.succeed("logger -t tinyproxy 'Proxying refused on filtered domain \"evil.example\"'")
+    machine.succeed("systemd-run --unit=boom --wait false || true")
+
+    machine.wait_until_succeeds("grep -q 'SSH login on luna: root, from phone' /tmp/alerts", timeout=30)
+    machine.wait_until_succeeds("grep -q 'Egress refused' /tmp/alerts", timeout=30)
+    machine.wait_until_succeeds("grep -q 'boom.service failed' /tmp/alerts", timeout=30)
+
+    # A second SSH login in the window gives no second alert.
+    machine.succeed("logger -t tailscaled 'audit: SSH login: user=root uid=0 from=100.88.0.9 ts_user=coops@example.com node=phone.example.ts.net.'")
+    machine.sleep(3)
+    count = machine.succeed("grep -c 'SSH login on luna' /tmp/alerts").strip()
+    assert count == "1", f"two SSH alerts in one window: {count}"
+  '';
+}
 #+end_src
 
 * Build: the Phoenix app
@@ -13185,7 +13676,7 @@ SSH_KEY   ?= $(HOME)/.ssh/luna_ed25519
 BOOTSTRAP := $(HOME)/.local/state/luna/bootstrap
 DEV       := nix develop $(FLAKE) --command
 
-.PHONY: help tangle check build install deploy host-key forget-host-key secrets matrix-users money-upload logs web-logs web-lock web-vm-test deps-audit audit
+.PHONY: help tangle check build install deploy host-key forget-host-key secrets matrix-users money-upload logs web-logs web-lock web-vm-test egress-vm-test sentry-vm-test deps-audit audit
 
 help:
 	@echo "tangle           Make the build files from $(ORG)."
@@ -13202,6 +13693,8 @@ help:
 	@echo "web-logs         Show the luna-web log."
 	@echo "web-lock         Write pkgs/luna-web/mix.lock again with mix deps.get."
 	@echo "web-vm-test      Run the luna-web VM test. The test needs KVM."
+	@echo "egress-vm-test   Run the VM test of the outbound allowlist. The test needs KVM."
+	@echo "sentry-vm-test   Run the VM test of the alerts. The test needs KVM."
 	@echo "deps-audit       Show retired Hex packages and security advisories."
 	@echo "audit            Show the end of the audit log."
 
@@ -13279,6 +13772,14 @@ web-lock:
 web-vm-test:
 	nix build --impure --no-link --print-build-logs --expr \
 	  '(builtins.getFlake "$(FLAKE)").inputs.nixpkgs.legacyPackages.x86_64-linux.callPackage $(abspath tests/web-vm.nix) { }'
+
+egress-vm-test:
+	nix build --impure --no-link --print-build-logs --expr \
+	  '(builtins.getFlake "$(FLAKE)").inputs.nixpkgs.legacyPackages.x86_64-linux.callPackage $(abspath tests/egress-vm.nix) { }'
+
+sentry-vm-test:
+	nix build --impure --no-link --print-build-logs --expr \
+	  '(builtins.getFlake "$(FLAKE)").inputs.nixpkgs.legacyPackages.x86_64-linux.callPackage $(abspath tests/sentry-vm.nix) { }'
 
 # mix hex.audit reads the advisories from hex.pm, so it needs the network.
 deps-audit:

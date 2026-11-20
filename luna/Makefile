@@ -15,7 +15,7 @@ SSH_KEY   ?= $(HOME)/.ssh/luna_ed25519
 BOOTSTRAP := $(HOME)/.local/state/luna/bootstrap
 DEV       := nix develop $(FLAKE) --command
 
-.PHONY: help tangle check build install deploy host-key forget-host-key secrets matrix-users money-upload logs web-logs web-lock web-vm-test deps-audit audit
+.PHONY: help tangle check build install deploy host-key forget-host-key secrets matrix-users money-upload logs web-logs web-lock web-vm-test egress-vm-test sentry-vm-test deps-audit audit
 
 help:
 	@echo "tangle           Make the build files from $(ORG)."
@@ -32,6 +32,8 @@ help:
 	@echo "web-logs         Show the luna-web log."
 	@echo "web-lock         Write pkgs/luna-web/mix.lock again with mix deps.get."
 	@echo "web-vm-test      Run the luna-web VM test. The test needs KVM."
+	@echo "egress-vm-test   Run the VM test of the outbound allowlist. The test needs KVM."
+	@echo "sentry-vm-test   Run the VM test of the alerts. The test needs KVM."
 	@echo "deps-audit       Show retired Hex packages and security advisories."
 	@echo "audit            Show the end of the audit log."
 
@@ -109,6 +111,14 @@ web-lock:
 web-vm-test:
 	nix build --impure --no-link --print-build-logs --expr \
 	  '(builtins.getFlake "$(FLAKE)").inputs.nixpkgs.legacyPackages.x86_64-linux.callPackage $(abspath tests/web-vm.nix) { }'
+
+egress-vm-test:
+	nix build --impure --no-link --print-build-logs --expr \
+	  '(builtins.getFlake "$(FLAKE)").inputs.nixpkgs.legacyPackages.x86_64-linux.callPackage $(abspath tests/egress-vm.nix) { }'
+
+sentry-vm-test:
+	nix build --impure --no-link --print-build-logs --expr \
+	  '(builtins.getFlake "$(FLAKE)").inputs.nixpkgs.legacyPackages.x86_64-linux.callPackage $(abspath tests/sentry-vm.nix) { }'
 
 # mix hex.audit reads the advisories from hex.pm, so it needs the network.
 deps-audit:
