@@ -24,7 +24,7 @@ defmodule LunaWeb.Endpoint do
   # The owner check comes before the static files, as in the Python app.
   plug LunaWeb.Owner
 
-  plug Plug.Static, at: "/", from: :luna_web, only: ~w(app.js app.css)
+  plug Plug.Static, at: "/", from: :luna_web, only: ~w(app.js app.css mic-worklet.js)
   plug Plug.Static, at: "/vendor", from: {:phoenix, "priv/static"}, only: ~w(phoenix.min.js)
   plug Plug.Static, at: "/vendor", from: {:phoenix_live_view, "priv/static"}, only: ~w(phoenix_live_view.min.js)
 

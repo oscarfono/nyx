@@ -64,6 +64,14 @@ def test_chat_with_an_image(tmp_path):
     assert agent.asked == [("what is this?", [("image/jpeg", data)])]
 
 
+def test_a_voice_message_is_marked(tmp_path):
+    webapp, agent, *_ = make(tmp_path)
+    async def scenario(client):
+        return (await client.post("/api/chat", json={"text": "next swing?", "channel": "voice"})).status
+    assert run(webapp, scenario) == 200
+    assert agent.asked == [("[voice] next swing?", [])]
+
+
 def test_bad_image_is_refused(tmp_path):
     webapp, agent, *_ = make(tmp_path)
     async def scenario(client):

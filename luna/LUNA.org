@@ -417,7 +417,7 @@ The Python core stays until the new core passes the same tests.
 |-------+---------------------------------------------------------------------------+------------------------------------|
 | E1    | Phoenix app and PostgreSQL in the flake. Deploy at :8443 in place of the Python app. | The page loads with the Tailscale login |
 | E2    | Chat, approvals, money and system panels in LiveView, through the core API | All Python web tests pass as Elixir tests |
-| E3    | Voice: push-to-talk, faster-whisper, Piper female voice. Camera frames.   | A spoken question gets a spoken reply |
+| E3    | Voice: push-to-talk, faster-whisper, Piper female voice. Presence: orb and ring. | A spoken question gets a spoken reply |
 | E4    | Task view (plan, tool calls, results) and fixed widgets                   | The core streams events to the page |
 | E5    | Port the core. Port the tests first.                                       | All core tests pass. Python retires. |
 | E6    | The iPhone app, then the watch app. Wake word, earbuds and notifications.  | "LUNA" wakes the phone in a pocket |
@@ -435,16 +435,16 @@ Each idea has its source project and its stage.
 | #  | Feature                                                                 | Source            | Stage |
 |----+-------------------------------------------------------------------------+-------------------+-------|
 | 1  | Approve with a Matrix reaction. Code still parses and checks the reply.  | OpenClaw          | core  |
-| 2  | Answer fixed phrases ("safe to spend", "next swing") in code first      | Home Assistant, OVOS | E3 |
-| 3  | A spoken morning brief for the FIFO roster                              | OpenJarvis        | E3    |
-| 4  | Voice through the Wyoming protocol, with a local wake word              | Home Assistant    | E3    |
+| 2  | Answer fixed phrases ("safe to spend", "next swing") in code first      | Home Assistant, OVOS | E5 |
+| 3  | A spoken morning brief for the FIFO roster                              | OpenJarvis        | E6    |
+| 4  | Voice through the Wyoming protocol (E3), with a local wake word (E6)   | Home Assistant    | E3, E6 |
 | 5  | Voice input cannot approve a tier 2 action                              | Home Assistant    | E3    |
 | 6  | A task view: the plan, each tool call and each result, live            | Leon              | E4    |
 | 7  | Fixed widgets in chat: safe-to-spend gauge, bills, roster strip         | Leon, LibreChat   | E4    |
 | 8  | Labelled memory sections. Some sections are read-only to LUNA.          | Letta             | E5    |
 | 9  | Scheduled jobs in plain language, with the result in Matrix             | Hermes, Khoj      | E5    |
 | 10 | Refuse a tier 2 request from a scheduled job when no human is present   | OpenClaw          | core  |
-| 11 | Transcribe voice memos from Matrix                                       | Hermes            | E3    |
+| 11 | Transcribe voice memos from Matrix                                       | Hermes            | E5    |
 | 12 | Branch a conversation to compare plans                                  | LibreChat         | E4    |
 
 ** Ideas that LUNA does not use
@@ -643,6 +643,15 @@ Edit these values before the first install.
   # true gives the agent the money tools and starts the Monday money post.
   money = false;
 
+  # The voice of LUNA. Refer to "Voice" in LUNA.org.
+  # sttModel: base-int8 is faster, small-int8 is more accurate. Measure on luna.
+  # ttsVoice: a Piper voice name. lengthScale above 1.0 speaks slower.
+  voice = {
+    sttModel = "small-int8";
+    ttsVoice = "en_GB-cori-high";
+    lengthScale = 1.0;
+  };
+
   # The Wise float. Refer to "Build: the Wise float" in LUNA.org.
   # WARNING: a payment cannot be undone. Keep mode = "dry-run" until the
   # approval flow works for some weeks. Modes: off, dry-run, draft, auto.
@@ -732,6 +741,7 @@ in
     ../../modules/luna/matrix.nix
     ../../modules/luna/core.nix
     ../../modules/luna/web.nix
+    ../../modules/luna/voice.nix
   ];
 
   _module.args = { inherit site secretsReady; };
@@ -1892,6 +1902,9 @@ How you work:
 - You cannot send money, buy, book or send messages for Coops. Future tools
   for that will ask Coops for approval. Do not claim that you did such an action.
 - Replies go to a phone. Keep them short. Use Markdown lists and tables.
+- A message that starts with [voice] came by voice, and LUNA speaks the reply.
+  Reply for the ear: one to three short sentences. No Markdown, no lists, no
+  tables. Round the numbers. A voice message can never approve a request.
 """
 
 BETAS = ["server-side-fallback-2026-07-01", "mid-conversation-tool-changes-2026-07-01"]
@@ -4211,13 +4224,15 @@ The core API is JSON over HTTP on the unix socket =/run/luna-api/api.sock=.
 | Request                           | Body                      | Reply                                    |
 |-----------------------------------+---------------------------+------------------------------------------|
 | =GET /api/history=                |                           | ={"messages": [{"role", "text"}]}=       |
-| =POST /api/chat=                  | ={"text", "image"?}=      | ={"reply"}=                              |
+| =POST /api/chat=                  | ={"text", "image"?, "channel"?}= | ={"reply"}=                       |
 | =GET /api/approvals=              |                           | ={"approvals": [{"id", "summary", "created"}]}= |
 | =POST /api/approvals/{id}/{action}= | ={}=, action is =approve= or =deny= | ={"result"}=                   |
 | =GET /api/money=                  |                           | ={"text"}=                               |
 | =GET /api/system=                 |                           | ={"started", "update", "memory", "settings", "pending_approvals", "events"}= |
 
 =image= is ={"media_type", "data"}=. =data= is base64.
+=channel= is =text= (the default) or =voice=.
+The core puts =[voice]= before a voice message. The system prompt tells LUNA to reply for the ear.
 LUNA accepts JPEG, PNG or WebP, to 5 MB.
 An error reply has the status 400 and ={"error"}=.
 
@@ -4305,7 +4320,10 @@ class WebApp:
             images.append((media_type, data))
         if not text and not images:
             return web.json_response({"error": "Write a message."}, status=400)
-        self.audit.write("web.chat", chars=len(text), images=len(images))
+        voice = body.get("channel") == "voice"
+        if voice:
+            text = "[voice] " + text
+        self.audit.write("web.chat", chars=len(text), images=len(images), voice=voice)
         reply = await self.agent.ask(text or "What do you see?", images=images)
         return web.json_response({"reply": reply})
 
@@ -4435,6 +4453,14 @@ def test_chat_with_an_image(tmp_path):
     status, body = run(webapp, scenario)
     assert status == 200 and body["reply"] == "reply: what is this?"
     assert agent.asked == [("what is this?", [("image/jpeg", data)])]
+
+
+def test_a_voice_message_is_marked(tmp_path):
+    webapp, agent, *_ = make(tmp_path)
+    async def scenario(client):
+        return (await client.post("/api/chat", json={"text": "next swing?", "channel": "voice"})).status
+    assert run(webapp, scenario) == 200
+    assert agent.asked == [("[voice] next swing?", [])]
 
 
 def test_bad_image_is_refused(tmp_path):
@@ -4700,6 +4726,7 @@ config :logger, :default_formatter, format: "[$level] $message\n"
 
 if config_env() == :test do
   config :luna_web, :owner_login, "owner@example.com"
+  # test_helper.exs starts the fake voice server and sets :voice.
   # test_helper.exs starts the fake core on this socket.
   config :luna_web, :core_socket, Path.join(System.get_env("TMPDIR", "/tmp"), "luna-fake-core.sock")
 
@@ -4737,6 +4764,7 @@ if config_env() == :prod do
 
   config :luna_web, :owner_login, env.("LUNA_OWNER_LOGIN")
   config :luna_web, :core_socket, env.("LUNA_CORE_SOCKET")
+  config :luna_web, :voice, stt: env.("LUNA_STT_URI"), tts: env.("LUNA_TTS_URI")
 
   config :luna_web, LunaWeb.Endpoint,
     server: true,
@@ -4807,13 +4835,17 @@ defmodule LunaWeb.Core do
     with {:ok, %{"messages" => messages}} <- request(:get, "/api/history"), do: {:ok, messages}
   end
 
-  @doc "Sends a message and an optional image. The image is checked before the request."
-  def chat(text, image) when is_binary(text) do
+  @doc """
+  Sends a message and an optional image. The image is checked before the request.
+  The channel is "text" or "voice". Refer to the contract in LUNA.org.
+  """
+  def chat(text, image, channel \\ "text") when is_binary(text) and channel in ["text", "voice"] do
     text = String.trim(text)
 
     with {:ok, image} <- check_image(image),
          :ok <- check_message(text, image),
-         body = if(image, do: %{text: text, image: image}, else: %{text: text}),
+         body = %{text: text, channel: channel},
+         body = if(image, do: Map.put(body, :image, image), else: body),
          {:ok, %{"reply" => reply}} <-
            request(:post, "/api/chat", json: body, receive_timeout: @chat_timeout) do
       {:ok, reply}
@@ -4888,6 +4920,317 @@ defmodule LunaWeb.Core do
     end
   end
 end
+#+end_src
+
+** Voice
+
+A voice turn has five steps:
+1. Hold the talk button, or hold Space on the laptop. LUNA plays the "I hear you" earcon.
+2. The page sends 16 kHz, 16-bit, mono PCM to the server, in chunks of 200 ms.
+3. Release the button. LUNA plays the "I have it" earcon. faster-whisper makes the text.
+4. The core gets the text as a voice message. Refer to =channel= in [[*Contract][the contract]].
+5. Piper speaks the reply one sentence at a time. The first sentence plays while Piper makes the next.
+
+A press of the talk button stops LUNA at once (barge-in).
+Each turn has a number. The page drops the audio of an earlier turn.
+
+The Wyoming servers listen on =127.0.0.1= only. They have no zeroconf.
+The site values =voice.sttModel= and =voice.ttsVoice= select the models.
+
+*Voice cannot approve.* A voice turn goes to the chat endpoint only (backlog #5).
+The system prompt also tells LUNA that a voice message can never approve a request.
+Code makes each approval. Refer to [[*Approvals][Approvals]].
+
+The page plays the voice through Web Audio. An analyser gives the loudness to the presence element.
+The page must start the audio context in a user gesture, because iOS requires it.
+
+These backlog items moved out of stage E3:
+- #2, fixed phrases in code: the core API has no money or roster endpoint yet. Stage E5.
+- #3, the spoken morning brief: it needs the iPhone app. Stage E6.
+- #4, the wake word: Coops moved it to the iPhone app. Stage E6.
+- #11, voice memos from Matrix: it needs a change to the Python bot. Stage E5.
+
+#+begin_src elixir :tangle ../pkgs/luna-web/lib/luna_web/wyoming.ex
+defmodule LunaWeb.Wyoming do
+  @moduledoc """
+  A client of the Wyoming protocol, for speech to text and text to speech.
+
+  An event is one JSON line, then the optional data bytes, then the optional
+  payload bytes. The line gives the lengths in data_length and payload_length.
+  Refer to "Voice" in LUNA.org.
+  """
+
+  @version "1.11.0"
+  @rate 16_000
+  @chunk_bytes 6_400
+  @timeout :timer.seconds(30)
+
+  @doc "Sends 16 kHz, 16-bit, mono PCM to the STT server. Returns the text."
+  def transcribe(pcm, {host, port}) when is_binary(pcm) do
+    format = %{"rate" => @rate, "width" => 2, "channels" => 1}
+
+    with {:ok, socket} <- connect(host, port) do
+      try do
+        :ok = send_event(socket, "transcribe", %{"language" => "en"})
+        :ok = send_event(socket, "audio-start", format)
+
+        for <<chunk::binary-size(@chunk_bytes) <- pcm>> do
+          :ok = send_event(socket, "audio-chunk", format, chunk)
+        end
+
+        rest = binary_part(pcm, div(byte_size(pcm), @chunk_bytes) * @chunk_bytes, rem(byte_size(pcm), @chunk_bytes))
+        if rest != "", do: :ok = send_event(socket, "audio-chunk", format, rest)
+        :ok = send_event(socket, "audio-stop", %{})
+
+        case read_until(socket, ["transcript"]) do
+          {:ok, {"transcript", %{"text" => text}, _}} -> {:ok, String.trim(text)}
+          {:error, reason} -> {:error, reason}
+        end
+      after
+        :gen_tcp.close(socket)
+      end
+    end
+  end
+
+  @doc "Sends text to the TTS server. Returns the PCM and its format."
+  def synthesize(text, {host, port}) when is_binary(text) do
+    with {:ok, socket} <- connect(host, port) do
+      try do
+        :ok = send_event(socket, "synthesize", %{"text" => text})
+        collect(socket, nil, [])
+      after
+        :gen_tcp.close(socket)
+      end
+    end
+  end
+
+  defp collect(socket, format, chunks) do
+    case read_event(socket) do
+      {:ok, {"audio-start", data, _}} ->
+        collect(socket, data, chunks)
+
+      {:ok, {"audio-chunk", data, payload}} ->
+        collect(socket, format || data, [chunks, payload || ""])
+
+      {:ok, {"audio-stop", _, _}} when format != nil ->
+        {:ok, %{rate: format["rate"], width: format["width"], channels: format["channels"],
+                pcm: IO.iodata_to_binary(chunks)}}
+
+      {:ok, {"error", data, _}} ->
+        {:error, Map.get(data, "text", "The voice server sent an error.")}
+
+      {:ok, _other} ->
+        collect(socket, format, chunks)
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp read_until(socket, types) do
+    case read_event(socket) do
+      {:ok, {type, _, _} = event} -> if type in types, do: {:ok, event}, else: read_until(socket, types)
+      error -> error
+    end
+  end
+
+  defp connect(host, port) do
+    case :gen_tcp.connect(to_charlist(host), port, [:binary, active: false, packet: :line], @timeout) do
+      {:ok, socket} -> {:ok, socket}
+      {:error, _} -> {:error, "The voice server is not available."}
+    end
+  end
+
+  @doc false
+  def encode(type, data, payload \\ nil) do
+    data_bytes = if data == %{}, do: "", else: Jason.encode!(data)
+
+    header =
+      %{"type" => type, "version" => @version}
+      |> put_length("data_length", data_bytes)
+      |> put_length("payload_length", payload || "")
+
+    [Jason.encode!(header), "\n", data_bytes, payload || ""]
+  end
+
+  defp put_length(header, _key, ""), do: header
+  defp put_length(header, key, bytes), do: Map.put(header, key, byte_size(bytes))
+
+  defp send_event(socket, type, data, payload \\ nil) do
+    case :gen_tcp.send(socket, encode(type, data, payload)) do
+      :ok -> :ok
+      {:error, _} -> {:error, "The voice server closed the connection."}
+    end
+  end
+
+  defp read_event(socket) do
+    :ok = :inet.setopts(socket, packet: :line)
+
+    with {:ok, line} <- :gen_tcp.recv(socket, 0, @timeout),
+         {:ok, header} <- Jason.decode(line),
+         :ok <- :inet.setopts(socket, packet: :raw),
+         {:ok, data_bytes} <- recv_exact(socket, header["data_length"]),
+         {:ok, payload} <- recv_exact(socket, header["payload_length"]) do
+      data = Map.merge(header["data"] || %{}, if(data_bytes == "", do: %{}, else: Jason.decode!(data_bytes)))
+      {:ok, {header["type"], data, if(payload == "", do: nil, else: payload)}}
+    else
+      {:error, :timeout} -> {:error, "The voice server did not reply in time."}
+      {:error, _} -> {:error, "The voice server sent a bad reply."}
+    end
+  end
+
+  defp recv_exact(_socket, nil), do: {:ok, ""}
+  defp recv_exact(_socket, 0), do: {:ok, ""}
+  defp recv_exact(socket, n), do: :gen_tcp.recv(socket, n, @timeout)
+end
+#+end_src
+
+#+begin_src elixir :tangle ../pkgs/luna-web/lib/luna_web/voice.ex
+defmodule LunaWeb.Voice do
+  @moduledoc """
+  Voice turns: speech to text, the core, then text to speech, one sentence
+  at a time. Refer to "Voice" in LUNA.org.
+
+  A voice turn goes to the chat endpoint only. A voice turn can never
+  approve a request (backlog #5).
+  """
+
+  alias LunaWeb.{Core, Wyoming}
+
+  # 60 seconds of 16 kHz, 16-bit, mono audio.
+  @max_pcm_bytes 16_000 * 2 * 60
+  # Less than 0.3 seconds of audio is a slip of the finger.
+  @min_pcm_bytes 16_000 * 2 * 3 |> div(10)
+
+  def max_pcm_bytes, do: @max_pcm_bytes
+
+  @doc "Speech to text. Returns {:ok, text} or {:error, message}."
+  def transcribe(pcm) when byte_size(pcm) < @min_pcm_bytes, do: {:error, "I did not hear anything."}
+  def transcribe(pcm) when byte_size(pcm) > @max_pcm_bytes, do: {:error, "Keep a voice message under one minute."}
+
+  def transcribe(pcm) do
+    case Wyoming.transcribe(pcm, server(:stt)) do
+      {:ok, ""} -> {:error, "I did not hear anything."}
+      other -> other
+    end
+  end
+
+  @doc "Sends the transcript to the core as a voice message."
+  def ask(text), do: Core.chat(text, nil, "voice")
+
+  @doc "Text to speech for one sentence."
+  def synthesize(sentence), do: Wyoming.synthesize(sentence, server(:tts))
+
+  @doc """
+  Makes the text fit for speech, and cuts it into sentences.
+  A long first sentence is cut at its first comma, so the first audio comes sooner.
+  """
+  def sentences(text) do
+    text
+    |> String.replace(~r/```.*?```/s, " ")
+    |> String.split("\n")
+    |> Enum.reject(&String.starts_with?(String.trim_leading(&1), "|"))
+    |> Enum.map(&String.replace(&1, ~r/^\s*(#+|[-*+]|\d+\.)\s+/, ""))
+    |> Enum.join(" ")
+    |> String.replace(~r/[*_`#>]/, "")
+    |> String.replace(~r/\[([^\]]+)\]\([^)]+\)/, "\\1")
+    |> String.replace(~r/\s+/, " ")
+    |> String.trim()
+    |> String.split(~r/(?<=[.!?])\s+/, trim: true)
+    |> split_first()
+  end
+
+  defp split_first([first | rest]) when byte_size(first) > 80 do
+    case String.split(first, ~r/(?<=,)\s+/, parts: 2) do
+      [a, b] -> [a, b | rest]
+      _ -> [first | rest]
+    end
+  end
+
+  defp split_first(list), do: list
+
+  defp server(key) do
+    uri = Application.fetch_env!(:luna_web, :voice) |> Keyword.fetch!(key) |> URI.parse()
+    {uri.host, uri.port}
+  end
+end
+#+end_src
+
+#+begin_src js :tangle ../pkgs/luna-web/priv/static/mic-worklet.js
+// The microphone worklet. It makes 16 kHz, 16-bit, mono PCM from the input,
+// and posts one Int16Array each 200 ms. sampleRate is the rate of the context.
+class LunaMic extends AudioWorkletProcessor {
+  constructor() {
+    super();
+    this.step = sampleRate / 16000;
+    this.sum = 0;
+    this.count = 0;
+    this.next = this.step;
+    this.position = 0;
+    this.out = new Int16Array(3200);
+    this.length = 0;
+  }
+
+  process(inputs) {
+    const input = inputs[0] && inputs[0][0];
+    if (!input) return true;
+    for (let i = 0; i < input.length; i++) {
+      // The mean of the input samples for each output sample is a small low-pass filter.
+      this.sum += input[i];
+      this.count += 1;
+      this.position += 1;
+      if (this.position >= this.next) {
+        const value = Math.max(-1, Math.min(1, this.sum / this.count));
+        this.out[this.length++] = value < 0 ? value * 0x8000 : value * 0x7fff;
+        this.sum = 0;
+        this.count = 0;
+        this.next += this.step;
+        if (this.length === this.out.length) {
+          this.port.postMessage(this.out.slice(0));
+          this.length = 0;
+        }
+      }
+    }
+    return true;
+  }
+}
+
+registerProcessor("luna-mic", LunaMic);
+#+end_src
+
+#+begin_src nix :tangle ../modules/luna/voice.nix
+{ lib, site, ... }:
+let
+  voice = site.voice;
+in
+{
+  # Speech to text. Only 127.0.0.1, so only processes on luna can connect.
+  services.wyoming.faster-whisper.servers.luna = {
+    enable = true;
+    uri = "tcp://127.0.0.1:10300";
+    sttLibrary = "faster-whisper";
+    model = voice.sttModel;
+    language = "en";
+    device = "cpu";
+    # No mDNS. Zeroconf would advertise the server on the network.
+    zeroconf.enable = false;
+  };
+
+  # Text to speech. The first start downloads the voice from Hugging Face.
+  services.wyoming.piper.servers.luna = {
+    enable = true;
+    uri = "tcp://127.0.0.1:10200";
+    voice = voice.ttsVoice;
+    lengthScale = voice.lengthScale;
+    zeroconf.enable = false;
+  };
+
+  # web.nix gives luna-web the addresses of these two servers.
+  systemd.services.luna-web = {
+    wants = [ "wyoming-faster-whisper-luna.service" "wyoming-piper-luna.service" ];
+    after = [ "wyoming-faster-whisper-luna.service" "wyoming-piper-luna.service" ];
+  };
+}
 #+end_src
 
 ** Audit log
@@ -5047,7 +5390,7 @@ defmodule LunaWeb.Endpoint do
   # The owner check comes before the static files, as in the Python app.
   plug LunaWeb.Owner
 
-  plug Plug.Static, at: "/", from: :luna_web, only: ~w(app.js app.css)
+  plug Plug.Static, at: "/", from: :luna_web, only: ~w(app.js app.css mic-worklet.js)
   plug Plug.Static, at: "/vendor", from: {:phoenix, "priv/static"}, only: ~w(phoenix.min.js)
   plug Plug.Static, at: "/vendor", from: {:phoenix_live_view, "priv/static"}, only: ~w(phoenix_live_view.min.js)
 
@@ -5141,9 +5484,11 @@ defmodule LunaWeb.HomeLive do
   """
   use Phoenix.LiveView
 
-  alias LunaWeb.Core
+  alias LunaWeb.{Core, Voice}
 
   @panels ~w(chat approvals money system)
+  # The presence states. "working" comes in stage E4, when the core streams tool events.
+  @styles ~w(orb ring)
   @refresh :timer.seconds(30)
 
   @impl true
@@ -5157,7 +5502,12 @@ defmodule LunaWeb.HomeLive do
         approvals: [],
         money: nil,
         system: nil,
-        notice: nil
+        notice: nil,
+        presence: "idle",
+        presence_style: "orb",
+        voice: [],
+        voice_bytes: 0,
+        turn: 0
       )
 
     if connected?(socket) do
@@ -5227,6 +5577,57 @@ defmodule LunaWeb.HomeLive do
     end
   end
 
+  # Voice. The page sends 16 kHz, 16-bit, mono PCM in base64 chunks while the
+  # button is down. A press also stops the voice of LUNA (barge-in).
+  def handle_event("voice-start", _params, socket) do
+    socket =
+      socket
+      |> cancel_async(:speak)
+      |> assign(presence: "listening", voice: [], voice_bytes: 0, turn: socket.assigns.turn + 1, notice: nil)
+
+    {:noreply, socket}
+  end
+
+  def handle_event("voice-chunk", %{"data" => data}, %{assigns: %{presence: "listening"}} = socket)
+      when is_binary(data) do
+    max = Voice.max_pcm_bytes()
+
+    with {:ok, pcm} <- Base.decode64(data),
+         bytes when bytes <= max <- socket.assigns.voice_bytes + byte_size(pcm) do
+      {:noreply, assign(socket, voice: [socket.assigns.voice, pcm], voice_bytes: bytes)}
+    else
+      _ -> {:noreply, socket}
+    end
+  end
+
+  def handle_event("voice-chunk", _params, socket), do: {:noreply, socket}
+
+  def handle_event("voice-stop", _params, %{assigns: %{presence: "listening"}} = socket) do
+    pcm = IO.iodata_to_binary(socket.assigns.voice)
+
+    socket =
+      socket
+      |> assign(presence: "thinking", voice: [], voice_bytes: 0)
+      |> start_async(:transcribe, fn -> Voice.transcribe(pcm) end)
+
+    {:noreply, socket}
+  end
+
+  def handle_event("voice-stop", _params, socket), do: {:noreply, socket}
+
+  # The page tells the server when the last audio stops.
+  def handle_event("voice-done", %{"turn" => turn}, %{assigns: %{turn: turn, presence: "speaking"}} = socket) do
+    {:noreply, assign(socket, presence: "idle")}
+  end
+
+  def handle_event("voice-done", _params, socket), do: {:noreply, socket}
+
+  def handle_event("presence-style", %{"style" => style}, socket) when style in @styles do
+    {:noreply, assign(socket, presence_style: style)}
+  end
+
+  def handle_event("presence-style", _params, socket), do: {:noreply, socket}
+
   def handle_event("decide", %{"id" => id, "action" => action}, socket) do
     notice =
       case Core.decide(id, action) do
@@ -5238,6 +5639,38 @@ defmodule LunaWeb.HomeLive do
   end
 
   @impl true
+  def handle_async(:transcribe, {:ok, {:ok, text}}, socket) do
+    socket =
+      socket
+      |> add_message("user", "[voice] " <> text)
+      |> start_async(:voice_chat, fn -> Voice.ask(text) end)
+
+    {:noreply, socket}
+  end
+
+  def handle_async(:transcribe, result, socket), do: {:noreply, voice_error(socket, result)}
+
+  def handle_async(:voice_chat, {:ok, {:ok, reply}}, socket) do
+    lv = self()
+    turn = socket.assigns.turn
+    sentences = Voice.sentences(reply)
+
+    socket =
+      socket
+      |> assign(presence: "speaking")
+      |> add_message("assistant", reply)
+      |> load_approvals()
+      |> start_async(:speak, fn -> speak(lv, turn, sentences) end)
+
+    {:noreply, socket}
+  end
+
+  def handle_async(:voice_chat, result, socket), do: {:noreply, voice_error(socket, result)}
+
+  def handle_async(:speak, {:ok, :ok}, socket), do: {:noreply, socket}
+  def handle_async(:speak, {:ok, {:error, message}}, socket), do: {:noreply, voice_error(socket, {:ok, {:error, message}})}
+  def handle_async(:speak, {:exit, _}, socket), do: {:noreply, socket}
+
   def handle_async(:chat, result, socket) do
     text =
       case result do
@@ -5251,6 +5684,45 @@ defmodule LunaWeb.HomeLive do
 
   @impl true
   def handle_info(:refresh, socket), do: {:noreply, load_approvals(socket)}
+
+  def handle_info({:voice_audio, turn, audio}, %{assigns: %{turn: turn}} = socket) do
+    event = %{turn: turn, rate: audio.rate, data: Base.encode64(audio.pcm)}
+    {:noreply, push_event(socket, "voice-audio", event)}
+  end
+
+  def handle_info({:voice_end, turn}, %{assigns: %{turn: turn}} = socket) do
+    {:noreply, push_event(socket, "voice-end", %{turn: turn})}
+  end
+
+  # Audio from an earlier turn. A press of the button stopped that turn.
+  def handle_info({:voice_audio, _, _}, socket), do: {:noreply, socket}
+  def handle_info({:voice_end, _}, socket), do: {:noreply, socket}
+
+  # Runs in the :speak task. Each sentence goes to the page when it is ready.
+  defp speak(lv, turn, sentences) do
+    result =
+      Enum.reduce_while(sentences, :ok, fn sentence, :ok ->
+        case Voice.synthesize(sentence) do
+          {:ok, audio} -> send(lv, {:voice_audio, turn, audio}) && {:cont, :ok}
+          {:error, message} -> {:halt, {:error, message}}
+        end
+      end)
+
+    send(lv, {:voice_end, turn})
+    result
+  end
+
+  defp voice_error(socket, result) do
+    message =
+      case result do
+        {:ok, {:error, message}} -> message
+        _ -> "The voice request stopped."
+      end
+
+    socket
+    |> assign(presence: "error", notice: message)
+    |> push_event("voice-error", %{})
+  end
 
   defp load_history(socket) do
     case Core.history() do
@@ -5276,8 +5748,15 @@ defmodule LunaWeb.HomeLive do
     do: assign(socket, messages: socket.assigns.messages ++ [message(role, text)])
 
   # Only two roles. A different value from the core becomes "assistant".
+  # The core marks a voice message with "[voice] ". The page shows a mark in its place.
+  defp message("user", "[voice] " <> text), do: %{role: "user voice", text: text}
   defp message("user", text), do: %{role: "user", text: to_string(text)}
   defp message(_role, text), do: %{role: "assistant", text: to_string(text)}
+
+  defp talk_label("listening"), do: "Listening... release to send"
+  defp talk_label("thinking"), do: "LUNA is thinking..."
+  defp talk_label("speaking"), do: "Hold to talk (stops LUNA)"
+  defp talk_label(_), do: "Hold to talk"
 
   defp setting(value) when is_binary(value), do: value
   defp setting(value), do: Jason.encode!(value)
@@ -5292,7 +5771,32 @@ defmodule LunaWeb.HomeLive do
   def render(assigns) do
     ~H"""
     <header>
+      <div
+        id="presence"
+        phx-hook="Presence"
+        class="presence"
+        data-state={@presence}
+        data-style={@presence_style}
+        role="status"
+        aria-label={"LUNA is " <> @presence}
+      >
+        <div class="orb"></div>
+        <svg class="ring" viewBox="0 0 100 100" aria-hidden="true">
+          <circle class="ring-track" cx="50" cy="50" r="42" />
+          <circle class="ring-arc" cx="50" cy="50" r="42" />
+        </svg>
+      </div>
       <h1>LUNA</h1>
+      <div class="styles" aria-label="Presence style">
+        <button
+          :for={style <- ["orb", "ring"]}
+          phx-click="presence-style"
+          phx-value-style={style}
+          class={if @presence_style == style, do: "active"}
+        >
+          {String.capitalize(style)}
+        </button>
+      </div>
       <nav>
         <button
           :for={{panel, label} <- [{"chat", "Chat"}, {"approvals", "Approvals"}, {"money", "Money"}, {"system", "System"}]}
@@ -5327,6 +5831,15 @@ defmodule LunaWeb.HomeLive do
           </div>
           <button type="button" data-action="open">Camera</button>
         </div>
+        <button
+          id="talk"
+          phx-hook="Talk"
+          class={"talk " <> @presence}
+          type="button"
+          aria-label="Hold to talk to LUNA"
+        >
+          {talk_label(@presence)}
+        </button>
         <form id="composer" phx-hook="Composer" phx-update="ignore">
           <textarea name="text" rows="2" placeholder="Message LUNA. Enter sends, Shift+Enter is a new line."></textarea>
           <button type="submit">Send</button>
@@ -5369,7 +5882,7 @@ end
 #+end_src
 
 #+begin_src js :tangle ../pkgs/luna-web/priv/static/app.js
-// The LiveView socket and two hooks. phoenix.min.js and
+// The LiveView socket and four hooks. phoenix.min.js and
 // phoenix_live_view.min.js load first and set the globals Phoenix and LiveView.
 (function () {
   "use strict";
@@ -5472,10 +5985,199 @@ end
     }
   };
 
+  // One audio context for the page. iOS starts it only in a user gesture,
+  // so the first press of the talk button makes it.
+  var Sound = {
+    context: null,
+    analyser: null,
+    next: 0,
+    sources: [],
+    ensure: function () {
+      if (!this.context) {
+        this.context = new (window.AudioContext || window.webkitAudioContext)();
+        this.analyser = this.context.createAnalyser();
+        this.analyser.fftSize = 512;
+        this.analyser.connect(this.context.destination);
+      }
+      if (this.context.state === "suspended") this.context.resume();
+      return this.context;
+    },
+    // Three earcons only. Refer to finding 7 of the interface review.
+    earcon: function (kind) {
+      if (!this.context) return;
+      var tones = { listen: [660, 880], got: [520], error: [330, 220] }[kind] || [];
+      var context = this.context;
+      tones.forEach(function (frequency, i) {
+        var start = context.currentTime + i * 0.09;
+        var osc = context.createOscillator();
+        var gain = context.createGain();
+        osc.frequency.value = frequency;
+        gain.gain.setValueAtTime(0.0001, start);
+        gain.gain.exponentialRampToValueAtTime(0.15, start + 0.02);
+        gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.12);
+        osc.connect(gain).connect(context.destination);
+        osc.start(start);
+        osc.stop(start + 0.14);
+      });
+    },
+    // Plays one sentence of 16-bit mono PCM after the sentence before it.
+    play: function (base64, rate, onEnd) {
+      var context = this.ensure();
+      var bytes = Uint8Array.from(atob(base64), function (c) { return c.charCodeAt(0); });
+      var samples = new Int16Array(bytes.buffer, 0, bytes.length >> 1);
+      var buffer = context.createBuffer(1, samples.length, rate);
+      var channel = buffer.getChannelData(0);
+      for (var i = 0; i < samples.length; i++) channel[i] = samples[i] / 0x8000;
+      var source = context.createBufferSource();
+      source.buffer = buffer;
+      source.connect(this.analyser);
+      var start = Math.max(context.currentTime + 0.05, this.next);
+      source.start(start);
+      this.next = start + buffer.duration;
+      this.sources.push(source);
+      var sound = this;
+      source.onended = function () {
+        sound.sources = sound.sources.filter(function (s) { return s !== source; });
+        if (onEnd) onEnd(sound.sources.length === 0);
+      };
+    },
+    stop: function () {
+      this.sources.forEach(function (s) { s.onended = null; try { s.stop(); } catch (e) {} });
+      this.sources = [];
+      this.next = 0;
+    },
+    // The loudness of the voice of LUNA, from 0 to 1.
+    level: function () {
+      if (!this.analyser || this.sources.length === 0) return 0;
+      var data = new Uint8Array(this.analyser.fftSize);
+      this.analyser.getByteTimeDomainData(data);
+      var sum = 0;
+      for (var i = 0; i < data.length; i++) { var v = (data[i] - 128) / 128; sum += v * v; }
+      return Math.min(1, Math.sqrt(sum / data.length) * 4);
+    }
+  };
+
+  // The presence element: orb or ring. It plays the voice of LUNA, so speech
+  // continues when you change the panel. Each device keeps its own style.
+  var Presence = {
+    mounted: function () {
+      var hook = this;
+      this.turn = null;
+      this.ended = false;
+      try {
+        var saved = window.localStorage.getItem("luna-presence-style");
+        if (saved && saved !== this.el.dataset.style) this.pushEvent("presence-style", { style: saved });
+      } catch (e) {}
+      this.handleEvent("voice-audio", function (event) {
+        if (hook.turn !== event.turn) { Sound.stop(); hook.turn = event.turn; hook.ended = false; }
+        Sound.play(event.data, event.rate, function (last) {
+          if (last && hook.ended) hook.pushEvent("voice-done", { turn: hook.turn });
+        });
+      });
+      this.handleEvent("voice-end", function (event) {
+        hook.ended = true;
+        if (Sound.sources.length === 0) hook.pushEvent("voice-done", { turn: event.turn });
+      });
+      this.handleEvent("voice-error", function () { Sound.earcon("error"); });
+      this.handleEvent("voice-stop-audio", function () { Sound.stop(); });
+      var frame = function () {
+        var level = hook.el.dataset.state === "listening" ? (window.lunaMicLevel || 0) : Sound.level();
+        hook.el.style.setProperty("--level", level.toFixed(3));
+        hook.frame = window.requestAnimationFrame(frame);
+      };
+      frame();
+    },
+    updated: function () {
+      try { window.localStorage.setItem("luna-presence-style", this.el.dataset.style); } catch (e) {}
+    },
+    destroyed: function () { window.cancelAnimationFrame(this.frame); }
+  };
+
+  // Push-to-talk. Hold the button, or hold Space when the message box is not
+  // in focus. A press stops the voice of LUNA at once.
+  var Talk = {
+    mounted: function () {
+      var hook = this;
+      var button = this.el;
+      this.active = false;
+
+      var start = function (event) {
+        if (event) event.preventDefault();
+        if (hook.active) return;
+        hook.active = true;
+        var context = Sound.ensure();
+        Sound.stop();
+        hook.pushEvent("voice-start", {});
+        Sound.earcon("listen");
+        var media = navigator.mediaDevices.getUserMedia({
+          audio: { echoCancellation: true, noiseSuppression: true, channelCount: 1 }
+        });
+        var worklet = context.audioWorklet.addModule("/mic-worklet.js");
+        Promise.all([media, worklet]).then(function (results) {
+          if (!hook.active) { results[0].getTracks().forEach(function (t) { t.stop(); }); return; }
+          hook.stream = results[0];
+          hook.source = context.createMediaStreamSource(hook.stream);
+          hook.node = new AudioWorkletNode(context, "luna-mic");
+          hook.node.port.onmessage = function (message) {
+            var samples = message.data;
+            var sum = 0;
+            for (var i = 0; i < samples.length; i++) sum += Math.abs(samples[i]);
+            window.lunaMicLevel = Math.min(1, (sum / samples.length / 0x8000) * 8);
+            var bytes = new Uint8Array(samples.buffer);
+            var text = "";
+            for (var j = 0; j < bytes.length; j += 0x8000) {
+              text += String.fromCharCode.apply(null, bytes.subarray(j, j + 0x8000));
+            }
+            hook.pushEvent("voice-chunk", { data: btoa(text) });
+          };
+          hook.source.connect(hook.node);
+        }).catch(function (error) {
+          hook.active = false;
+          Sound.earcon("error");
+          hook.pushEvent("camera-error", { message: "Microphone: " + (error.message || error) });
+        });
+      };
+
+      var stop = function (event) {
+        if (event) event.preventDefault();
+        if (!hook.active) return;
+        hook.active = false;
+        window.lunaMicLevel = 0;
+        // Wait for the last 200 ms chunk from the worklet.
+        window.setTimeout(function () {
+          if (hook.source) hook.source.disconnect();
+          if (hook.node) hook.node.port.onmessage = null;
+          if (hook.stream) hook.stream.getTracks().forEach(function (t) { t.stop(); });
+          hook.source = hook.node = hook.stream = null;
+          hook.pushEvent("voice-stop", {});
+          Sound.earcon("got");
+        }, 250);
+      };
+
+      button.addEventListener("pointerdown", start);
+      button.addEventListener("pointerup", stop);
+      button.addEventListener("pointercancel", stop);
+      button.addEventListener("pointerleave", stop);
+      button.addEventListener("contextmenu", function (e) { e.preventDefault(); });
+      this.keydown = function (event) {
+        var typing = document.activeElement && /^(TEXTAREA|INPUT|SELECT)$/.test(document.activeElement.tagName);
+        if (event.code === "Space" && !typing && !event.repeat) start(event);
+      };
+      this.keyup = function (event) { if (event.code === "Space" && hook.active) stop(event); };
+      window.addEventListener("keydown", this.keydown);
+      window.addEventListener("keyup", this.keyup);
+    },
+    destroyed: function () {
+      window.removeEventListener("keydown", this.keydown);
+      window.removeEventListener("keyup", this.keyup);
+      if (this.stream) this.stream.getTracks().forEach(function (t) { t.stop(); });
+    }
+  };
+
   var token = document.querySelector("meta[name='csrf-token']").getAttribute("content");
   var socket = new LiveView.LiveSocket("/live", Phoenix.Socket, {
     params: { _csrf_token: token },
-    hooks: { Composer: Composer, Camera: Camera }
+    hooks: { Composer: Composer, Camera: Camera, Presence: Presence, Talk: Talk }
   });
   socket.connect();
 })();
@@ -5517,6 +6219,35 @@ pre { background: var(--panel); padding: 12px; border-radius: 8px; white-space: 
 table { border-collapse: collapse; width: 100%; }
 td { padding: 4px 8px; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
 .muted { color: var(--muted); }
+/* The presence element. --level is the loudness, from 0 to 1. */
+.presence { --level: 0; position: relative; width: 44px; height: 44px; flex: none; }
+.presence .orb, .presence .ring { position: absolute; inset: 0; width: 100%; height: 100%; }
+.presence[data-style="orb"] .ring, .presence[data-style="ring"] .orb { display: none; }
+.orb { border-radius: 50%; background: radial-gradient(circle at 35% 35%, #fff 0, var(--accent) 45%, transparent 72%);
+       transform: scale(calc(0.72 + var(--level) * 0.45)); opacity: 0.85; transition: transform 60ms linear; }
+.ring-track { fill: none; stroke: var(--line); stroke-width: 6; }
+.ring-arc { fill: none; stroke: var(--accent); stroke-width: calc(6px + var(--level) * 6px); stroke-linecap: round;
+            stroke-dasharray: 66 198; transform-origin: 50% 50%; }
+.presence[data-state="idle"] .orb { animation: breathe 5s ease-in-out infinite; }
+.presence[data-state="idle"] .ring-arc { stroke-dasharray: 264 0; opacity: 0.35; }
+.presence[data-state="listening"] .orb { background: radial-gradient(circle at 35% 35%, #fff 0, #3fb950 45%, transparent 72%); }
+.presence[data-state="listening"] .ring-arc { stroke: #3fb950; stroke-dasharray: 264 0; }
+.presence[data-state="thinking"] .orb { animation: pulse 1.1s ease-in-out infinite; }
+.presence[data-state="thinking"] .ring-arc { animation: spin 1.2s linear infinite; }
+.presence[data-state="speaking"] .ring-arc { stroke-dasharray: 264 0; }
+.presence[data-state="error"] .orb { background: radial-gradient(circle at 35% 35%, #fff 0, #f85149 45%, transparent 72%); }
+.presence[data-state="error"] .ring-arc { stroke: #f85149; stroke-dasharray: 264 0; }
+@keyframes breathe { 50% { transform: scale(0.82); opacity: 0.6; } }
+@keyframes pulse { 50% { transform: scale(0.9); opacity: 1; } }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .orb, .ring-arc { animation: none !important; transition: none; } }
+.styles { display: flex; gap: 4px; }
+.styles button { padding: 2px 8px; font-size: 13px; }
+.styles button.active { border-color: var(--accent); color: var(--accent); }
+.talk { display: block; width: 100%; padding: 16px; margin: 8px 0; font-size: 17px; touch-action: none;
+        user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+.talk.listening { border-color: #3fb950; color: #3fb950; }
+.msg.voice::before { content: "\1F399  "; }
 #+end_src
 
 ** Tests
@@ -5526,6 +6257,7 @@ Each test runs in a database transaction, and the transaction rolls back.
 
 #+begin_src elixir :tangle ../pkgs/luna-web/test/test_helper.exs
 :ok = LunaWeb.FakeCore.start()
+:ok = LunaWeb.FakeWyoming.start()
 ExUnit.start()
 Ecto.Adapters.SQL.Sandbox.mode(LunaWeb.Repo, :manual)
 #+end_src
@@ -5702,6 +6434,177 @@ defmodule LunaWeb.CoreTest do
 end
 #+end_src
 
+The fake Wyoming server serves STT and TTS on one TCP port.
+
+#+begin_src elixir :tangle ../pkgs/luna-web/test/support/fake_wyoming.ex
+defmodule LunaWeb.FakeWyoming do
+  @moduledoc """
+  A fake Wyoming server for STT and TTS. It keeps the type of each event that
+  it gets, and the count of audio bytes.
+  STT replies with the transcript in :transcript. TTS replies with the text as the PCM.
+  """
+
+  def start do
+    {:ok, listen} = :gen_tcp.listen(0, [:binary, active: false, packet: :line, reuseaddr: true, ip: {127, 0, 0, 1}])
+    {:ok, port} = :inet.port(listen)
+    {:ok, _} = Agent.start_link(fn -> %{events: [], bytes: 0, transcript: "hello luna"} end, name: __MODULE__)
+    spawn_link(fn -> accept(listen) end)
+    uri = "tcp://127.0.0.1:#{port}"
+    Application.put_env(:luna_web, :voice, stt: uri, tts: uri)
+    :ok
+  end
+
+  def reset(transcript \\ "hello luna"),
+    do: Agent.update(__MODULE__, fn _ -> %{events: [], bytes: 0, transcript: transcript} end)
+
+  def state, do: Agent.get(__MODULE__, & &1)
+
+  defp accept(listen) do
+    {:ok, socket} = :gen_tcp.accept(listen)
+    spawn(fn -> serve(socket) end)
+    accept(listen)
+  end
+
+  defp serve(socket) do
+    case read(socket) do
+      {:ok, type, data, payload} ->
+        Agent.update(__MODULE__, fn s ->
+          %{s | events: s.events ++ [type], bytes: s.bytes + byte_size(payload)}
+        end)
+
+        reply(socket, type, data)
+        serve(socket)
+
+      :closed ->
+        :ok
+    end
+  end
+
+  defp reply(socket, "audio-stop", _) do
+    send_event(socket, "transcript", %{"text" => state().transcript})
+  end
+
+  defp reply(socket, "synthesize", %{"text" => text}) do
+    format = %{"rate" => 22_050, "width" => 2, "channels" => 1}
+    send_event(socket, "audio-start", format)
+    send_event(socket, "audio-chunk", format, text)
+    send_event(socket, "audio-stop", %{})
+  end
+
+  defp reply(_socket, _type, _data), do: :ok
+
+  defp send_event(socket, type, data, payload \\ nil),
+    do: :gen_tcp.send(socket, LunaWeb.Wyoming.encode(type, data, payload))
+
+  defp read(socket) do
+    :inet.setopts(socket, packet: :line)
+
+    with {:ok, line} <- :gen_tcp.recv(socket, 0),
+         header = Jason.decode!(line),
+         :ok <- :inet.setopts(socket, packet: :raw),
+         {:ok, data} <- exact(socket, header["data_length"]),
+         {:ok, payload} <- exact(socket, header["payload_length"]) do
+      {:ok, header["type"], if(data == "", do: %{}, else: Jason.decode!(data)), payload}
+    else
+      _ -> :closed
+    end
+  end
+
+  defp exact(_socket, n) when n in [nil, 0], do: {:ok, ""}
+  defp exact(socket, n), do: :gen_tcp.recv(socket, n)
+end
+#+end_src
+
+#+begin_src elixir :tangle ../pkgs/luna-web/test/voice_test.exs
+defmodule LunaWeb.VoiceTest do
+  # One fake core and one fake voice server serve all tests.
+  use LunaWeb.Case, async: false
+
+  alias LunaWeb.{FakeCore, FakeWyoming, Voice, Wyoming}
+
+  setup do
+    FakeCore.reset()
+    FakeWyoming.reset()
+  end
+
+  # One second of silence: 16 kHz, 16-bit, mono.
+  @second :binary.copy(<<0, 0>>, 16_000)
+
+  test "an event has a JSON line, the data, then the payload" do
+    [line, "\n", data, payload] = Wyoming.encode("audio-chunk", %{"rate" => 16_000}, "abc")
+    header = Jason.decode!(line)
+    assert header["type"] == "audio-chunk"
+    assert header["data_length"] == byte_size(data)
+    assert header["payload_length"] == 3
+    assert payload == "abc"
+  end
+
+  test "speech to text sends all the audio and returns the transcript" do
+    assert Voice.transcribe(@second) == {:ok, "hello luna"}
+    state = FakeWyoming.state()
+    assert hd(state.events) == "transcribe"
+    assert List.last(state.events) == "audio-stop"
+    assert state.bytes == byte_size(@second)
+  end
+
+  test "a very short or a very long recording does not go to the server" do
+    assert {:error, _} = Voice.transcribe(binary_part(@second, 0, 100))
+    assert {:error, _} = Voice.transcribe(:binary.copy(@second, 61))
+    assert FakeWyoming.state().events == []
+  end
+
+  test "an empty transcript is an error" do
+    FakeWyoming.reset("  ")
+    assert {:error, "I did not hear anything."} = Voice.transcribe(@second)
+  end
+
+  test "text to speech returns the PCM and its rate" do
+    assert {:ok, %{rate: 22_050, pcm: "Hi."}} = Voice.synthesize("Hi.")
+  end
+
+  test "a voice turn goes to chat as a voice message" do
+    assert Voice.ask("next swing?") == {:ok, "reply: next swing?"}
+    assert [{"POST", "/api/chat", %{"text" => "next swing?", "channel" => "voice"}}] = FakeCore.requests()
+  end
+
+  test "a voice turn cannot approve a request" do
+    FakeWyoming.reset("approve a1b2c3")
+    {:ok, text} = Voice.transcribe(@second)
+    assert {:ok, _} = Voice.ask(text)
+    assert [{"POST", "/api/chat", %{"channel" => "voice"}}] = FakeCore.requests()
+  end
+
+  test "a text message has the channel text" do
+    assert {:ok, _} = LunaWeb.Core.chat("hi", nil)
+    assert [{"POST", "/api/chat", %{"channel" => "text"}}] = FakeCore.requests()
+  end
+
+  test "the text for speech has no Markdown, and comes in sentences" do
+    text = """
+    ## Plan
+    **Safe to spend:** $120. See [the plan](https://example.com).
+    - Rent is due Friday!
+    | a | b |
+    Next swing starts in 9 days?
+    """
+
+    assert Voice.sentences(text) == [
+             "Plan Safe to spend: $120.",
+             "See the plan.",
+             "Rent is due Friday!",
+             "Next swing starts in 9 days?"
+           ]
+  end
+
+  test "a long first sentence is cut at its first comma" do
+    long = "Your safe-to-spend number this week is lower than last week, because the car insurance is due."
+    assert [first, second] = Voice.sentences(long)
+    assert String.ends_with?(first, ",")
+    assert String.starts_with?(second, "because")
+  end
+end
+#+end_src
+
 #+begin_src elixir :tangle ../pkgs/luna-web/test/web_test.exs
 defmodule LunaWeb.WebTest do
   use LunaWeb.Case, async: true
@@ -5851,6 +6754,9 @@ in
       LUNA_WEB_PORT = "8091";
       LUNA_WEB_SECRET_FILE = "${stateDir}/secret_key_base";
       LUNA_CORE_SOCKET = "/run/luna-api/api.sock";
+      # The Wyoming servers in voice.nix. Without them, a voice turn shows a notice.
+      LUNA_STT_URI = "tcp://127.0.0.1:10300";
+      LUNA_TTS_URI = "tcp://127.0.0.1:10200";
       LUNA_DB_SOCKET_DIR = "/run/postgresql";
       LUNA_DB_USER = user;
       LUNA_DB_NAME = user;

@@ -58,6 +58,9 @@ in
       LUNA_WEB_PORT = "8091";
       LUNA_WEB_SECRET_FILE = "${stateDir}/secret_key_base";
       LUNA_CORE_SOCKET = "/run/luna-api/api.sock";
+      # The Wyoming servers in voice.nix. Without them, a voice turn shows a notice.
+      LUNA_STT_URI = "tcp://127.0.0.1:10300";
+      LUNA_TTS_URI = "tcp://127.0.0.1:10200";
       LUNA_DB_SOCKET_DIR = "/run/postgresql";
       LUNA_DB_USER = user;
       LUNA_DB_NAME = user;

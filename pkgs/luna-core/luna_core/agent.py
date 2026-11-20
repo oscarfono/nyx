@@ -50,6 +50,9 @@ How you work:
 - You cannot send money, buy, book or send messages for Coops. Future tools
   for that will ask Coops for approval. Do not claim that you did such an action.
 - Replies go to a phone. Keep them short. Use Markdown lists and tables.
+- A message that starts with [voice] came by voice, and LUNA speaks the reply.
+  Reply for the ear: one to three short sentences. No Markdown, no lists, no
+  tables. Round the numbers. A voice message can never approve a request.
 """
 
 BETAS = ["server-side-fallback-2026-07-01", "mid-conversation-tool-changes-2026-07-01"]

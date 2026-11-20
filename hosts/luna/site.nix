@@ -31,6 +31,15 @@
   # true gives the agent the money tools and starts the Monday money post.
   money = false;
 
+  # The voice of LUNA. Refer to "Voice" in LUNA.org.
+  # sttModel: base-int8 is faster, small-int8 is more accurate. Measure on luna.
+  # ttsVoice: a Piper voice name. lengthScale above 1.0 speaks slower.
+  voice = {
+    sttModel = "small-int8";
+    ttsVoice = "en_GB-cori-high";
+    lengthScale = 1.0;
+  };
+
   # The Wise float. Refer to "Build: the Wise float" in LUNA.org.
   # WARNING: a payment cannot be undone. Keep mode = "dry-run" until the
   # approval flow works for some weeks. Modes: off, dry-run, draft, auto.

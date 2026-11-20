@@ -33,3 +33,32 @@ pre { background: var(--panel); padding: 12px; border-radius: 8px; white-space: 
 table { border-collapse: collapse; width: 100%; }
 td { padding: 4px 8px; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
 .muted { color: var(--muted); }
+/* The presence element. --level is the loudness, from 0 to 1. */
+.presence { --level: 0; position: relative; width: 44px; height: 44px; flex: none; }
+.presence .orb, .presence .ring { position: absolute; inset: 0; width: 100%; height: 100%; }
+.presence[data-style="orb"] .ring, .presence[data-style="ring"] .orb { display: none; }
+.orb { border-radius: 50%; background: radial-gradient(circle at 35% 35%, #fff 0, var(--accent) 45%, transparent 72%);
+       transform: scale(calc(0.72 + var(--level) * 0.45)); opacity: 0.85; transition: transform 60ms linear; }
+.ring-track { fill: none; stroke: var(--line); stroke-width: 6; }
+.ring-arc { fill: none; stroke: var(--accent); stroke-width: calc(6px + var(--level) * 6px); stroke-linecap: round;
+            stroke-dasharray: 66 198; transform-origin: 50% 50%; }
+.presence[data-state="idle"] .orb { animation: breathe 5s ease-in-out infinite; }
+.presence[data-state="idle"] .ring-arc { stroke-dasharray: 264 0; opacity: 0.35; }
+.presence[data-state="listening"] .orb { background: radial-gradient(circle at 35% 35%, #fff 0, #3fb950 45%, transparent 72%); }
+.presence[data-state="listening"] .ring-arc { stroke: #3fb950; stroke-dasharray: 264 0; }
+.presence[data-state="thinking"] .orb { animation: pulse 1.1s ease-in-out infinite; }
+.presence[data-state="thinking"] .ring-arc { animation: spin 1.2s linear infinite; }
+.presence[data-state="speaking"] .ring-arc { stroke-dasharray: 264 0; }
+.presence[data-state="error"] .orb { background: radial-gradient(circle at 35% 35%, #fff 0, #f85149 45%, transparent 72%); }
+.presence[data-state="error"] .ring-arc { stroke: #f85149; stroke-dasharray: 264 0; }
+@keyframes breathe { 50% { transform: scale(0.82); opacity: 0.6; } }
+@keyframes pulse { 50% { transform: scale(0.9); opacity: 1; } }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .orb, .ring-arc { animation: none !important; transition: none; } }
+.styles { display: flex; gap: 4px; }
+.styles button { padding: 2px 8px; font-size: 13px; }
+.styles button.active { border-color: var(--accent); color: var(--accent); }
+.talk { display: block; width: 100%; padding: 16px; margin: 8px 0; font-size: 17px; touch-action: none;
+        user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+.talk.listening { border-color: #3fb950; color: #3fb950; }
+.msg.voice::before { content: "\1F399  "; }

@@ -15,13 +15,17 @@ defmodule LunaWeb.Core do
     with {:ok, %{"messages" => messages}} <- request(:get, "/api/history"), do: {:ok, messages}
   end
 
-  @doc "Sends a message and an optional image. The image is checked before the request."
-  def chat(text, image) when is_binary(text) do
+  @doc """
+  Sends a message and an optional image. The image is checked before the request.
+  The channel is "text" or "voice". Refer to the contract in LUNA.org.
+  """
+  def chat(text, image, channel \\ "text") when is_binary(text) and channel in ["text", "voice"] do
     text = String.trim(text)
 
     with {:ok, image} <- check_image(image),
          :ok <- check_message(text, image),
-         body = if(image, do: %{text: text, image: image}, else: %{text: text}),
+         body = %{text: text, channel: channel},
+         body = if(image, do: Map.put(body, :image, image), else: body),
          {:ok, %{"reply" => reply}} <-
            request(:post, "/api/chat", json: body, receive_timeout: @chat_timeout) do
       {:ok, reply}

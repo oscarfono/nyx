@@ -68,7 +68,10 @@ class WebApp:
             images.append((media_type, data))
         if not text and not images:
             return web.json_response({"error": "Write a message."}, status=400)
-        self.audit.write("web.chat", chars=len(text), images=len(images))
+        voice = body.get("channel") == "voice"
+        if voice:
+            text = "[voice] " + text
+        self.audit.write("web.chat", chars=len(text), images=len(images), voice=voice)
         reply = await self.agent.ask(text or "What do you see?", images=images)
         return web.json_response({"reply": reply})
 

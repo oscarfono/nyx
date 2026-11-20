@@ -14,6 +14,7 @@ if config_env() == :prod do
 
   config :luna_web, :owner_login, env.("LUNA_OWNER_LOGIN")
   config :luna_web, :core_socket, env.("LUNA_CORE_SOCKET")
+  config :luna_web, :voice, stt: env.("LUNA_STT_URI"), tts: env.("LUNA_TTS_URI")
 
   config :luna_web, LunaWeb.Endpoint,
     server: true,

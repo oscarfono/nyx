@@ -14,6 +14,7 @@ config :logger, :default_formatter, format: "[$level] $message\n"
 
 if config_env() == :test do
   config :luna_web, :owner_login, "owner@example.com"
+  # test_helper.exs starts the fake voice server and sets :voice.
   # test_helper.exs starts the fake core on this socket.
   config :luna_web, :core_socket, Path.join(System.get_env("TMPDIR", "/tmp"), "luna-fake-core.sock")
 
