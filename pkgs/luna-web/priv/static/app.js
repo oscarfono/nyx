@@ -199,6 +199,7 @@
       var frame = function () {
         var level = hook.el.dataset.state === "listening" ? (window.lunaMicLevel || 0) : Sound.level();
         hook.el.style.setProperty("--level", level.toFixed(3));
+        document.documentElement.style.setProperty("--level", level.toFixed(3));
         hook.frame = window.requestAnimationFrame(frame);
       };
       frame();

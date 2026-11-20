@@ -1,4 +1,4 @@
-{ lib, beamPackages, postgresql_18 }:
+{ lib, beamPackages, postgresql_18, fetchurl, jetbrains-mono }:
 
 let
   pname = "luna-web";
@@ -6,6 +6,14 @@ let
   src = lib.fileset.toSource {
     root = ./.;
     fileset = lib.fileset.unions [ ./mix.exs ./mix.lock ./config ./lib ./priv ./test ];
+  };
+  # The fonts of the page. The page loads nothing from the internet, so luna
+  # serves them. Space Grotesk is not in nixpkgs: the build fetches it once
+  # from the Google Fonts repository (OFL), pinned to a commit and a hash.
+  spaceGrotesk = fetchurl {
+    name = "SpaceGrotesk.ttf";
+    url = "https://raw.githubusercontent.com/google/fonts/00a38a53f92aef923b9353f40128e8f4552ddae4/ofl/spacegrotesk/SpaceGrotesk%5Bwght%5D.ttf";
+    hash = "sha256-rK1t4fyTQ29cDx9BN3Ue8E8a6jBj5wNlNZcP/PvXn3I=";
   };
 in
 beamPackages.mixRelease {
@@ -18,6 +26,12 @@ beamPackages.mixRelease {
     inherit version src;
     hash = "sha256-4/l12IHvIY9mUvgHOPBlrBy49wSfFYeWneE/KYeOg+Y=";
   };
+
+  preBuild = ''
+    mkdir -p priv/static/fonts
+    cp ${spaceGrotesk} priv/static/fonts/SpaceGrotesk.ttf
+    cp ${jetbrains-mono}/share/fonts/truetype/JetBrainsMono-Regular.ttf priv/static/fonts/
+  '';
 
   # The tests need a PostgreSQL server. The check starts one in the build
   # directory, with a unix socket only.

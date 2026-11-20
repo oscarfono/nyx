@@ -42,7 +42,7 @@ defmodule LunaWeb.HomeLive do
     if connected?(socket) do
       LunaWeb.Audit.write("web.connect")
       :timer.send_interval(@refresh, :refresh)
-      {:ok, socket |> load_history() |> load_approvals()}
+      {:ok, socket |> load_history() |> load_approvals() |> load(:system, Core.system()) |> load_memory_count()}
     else
       {:ok, socket}
     end
@@ -295,6 +295,13 @@ defmodule LunaWeb.HomeLive do
     end
   end
 
+  defp load_memory_count(socket) do
+    case Core.memory_graph() do
+      {:ok, graph} -> assign(socket, memory_count: length(graph["nodes"] || []))
+      {:error, _} -> socket
+    end
+  end
+
   defp load(socket, key, {:ok, value}), do: assign(socket, key, value)
   defp load(socket, _key, {:error, text}), do: assign(socket, notice: text)
 
@@ -324,7 +331,11 @@ defmodule LunaWeb.HomeLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <header>
+    <header class="bar">
+      <div class="brand">
+        <span class="wordmark">LUNA</span>
+        <span class="status-line">{status_line(@system, @memory_count)}</span>
+      </div>
       <div
         id="presence"
         phx-hook="Presence"
@@ -340,71 +351,117 @@ defmodule LunaWeb.HomeLive do
           <circle class="ring-arc" cx="50" cy="50" r="42" />
         </svg>
       </div>
-      <h1>LUNA</h1>
-      <div class="styles" aria-label="Presence style">
+      <nav aria-label="Panels">
         <button
-          :for={style <- ["orb", "ring"]}
-          phx-click="presence-style"
-          phx-value-style={style}
-          class={if @presence_style == style, do: "active"}
-        >
-          {String.capitalize(style)}
-        </button>
-      </div>
-      <nav>
-        <button
-          :for={{panel, label} <- [{"chat", "Chat"}, {"approvals", "Approvals"}, {"money", "Money"}, {"memory", "Memory"}, {"system", "System"}]}
+          :for={{panel, label} <- [{"chat", "Console"}, {"memory", "Memory"}, {"money", "Money"}, {"approvals", "Approvals"}, {"system", "System"}]}
           phx-click="show"
           phx-value-panel={panel}
-          class={if @panel == panel, do: "active"}
+          class={if @panel == panel, do: "tab active", else: "tab"}
         >
-          {label}<span :if={panel == "approvals" and @approvals != []}> ({length(@approvals)})</span>
+          {label}<span :if={panel == "approvals" and @approvals != []} class="count">{length(@approvals)}</span>
         </button>
       </nav>
     </header>
-    <main>
+    <main class="deck">
       <p :if={@notice} id="notice" class="notice">{@notice}</p>
 
-      <section :if={@panel == "chat"} id="chat">
-        <div id="messages" aria-live="polite">
-          <div :for={m <- @messages} class={"msg " <> m.role}>{m.text}</div>
-          <div :if={@waiting} class="msg assistant wait">LUNA is thinking...</div>
+      <section :if={@panel == "chat"} id="chat" class="console">
+        <div class="column readouts" aria-label="Readouts">
+          <div class="panel">
+            <p class="label">Safe to spend · this week</p>
+            <p class="figure">{if @system && get_in(@system, ["settings", "money"]), do: "See Money", else: "Money is off"}</p>
+            <p class="hint">LUNA works this out in code from money.org.</p>
+          </div>
+          <div class="panel">
+            <p class="label">Roster</p>
+            <p class="figure small">Not read yet</p>
+            <div class="roster-strip" aria-hidden="true"><span :for={_ <- 1..14}></span></div>
+            <p class="hint">LUNA reads roster.org for this. It comes next.</p>
+          </div>
+          <div class="panel">
+            <p class="label">Due · 14 days</p>
+            <p class="hint">From the annual costs in money.org. It comes next.</p>
+          </div>
         </div>
-        <div id="camera" phx-hook="Camera" phx-update="ignore">
-          <div class="camera-view" hidden>
-            <video autoplay playsinline muted></video>
-            <div class="row">
-              <select aria-label="Camera"></select>
-              <button type="button" data-action="snap">Show LUNA</button>
-              <button type="button" data-action="close">Close camera</button>
+
+        <div class="column centre" aria-label="LUNA">
+          <div class="instrument" data-state={@presence}>
+            <svg viewBox="0 0 360 360" role="img" aria-label={"LUNA is " <> @presence}>
+              <circle class="i-outer" cx="180" cy="180" r="170" />
+              <circle class="i-ticks" cx="180" cy="180" r="150" />
+              <circle class="i-track" cx="180" cy="180" r="120" />
+              <circle class="i-arc" cx="180" cy="180" r="120" />
+              <circle class="i-core" cx="180" cy="180" r="78" />
+              <circle class="i-glow" cx="180" cy="180" r="44" />
+              <circle class="i-dot" cx="180" cy="180" r="22" />
+              <line class="i-mark" x1="180" y1="6" x2="180" y2="26" />
+              <line class="i-mark" x1="180" y1="334" x2="180" y2="354" />
+              <line class="i-mark" x1="6" y1="180" x2="26" y2="180" />
+              <line class="i-mark" x1="334" y1="180" x2="354" y2="180" />
+            </svg>
+          </div>
+          <p class="state-label">{state_label(@presence)}</p>
+
+          <div id="messages" class="transcript" aria-live="polite">
+            <div :for={m <- @messages} class={"msg " <> m.role}>
+              <span class="who">{if String.starts_with?(m.role, "user"), do: "You", else: "LUNA"}</span>
+              <span class="text">{m.text}</span>
+            </div>
+            <div :if={@waiting} class="msg assistant wait"><span class="who">LUNA</span><span class="text">Thinking…</span></div>
+          </div>
+
+          <button id="talk" phx-hook="Talk" class={"talk " <> @presence} type="button" aria-label="Hold to talk to LUNA">
+            {talk_label(@presence)}
+          </button>
+          <form id="composer" phx-hook="Composer" phx-update="ignore">
+            <textarea name="text" rows="2" aria-label="Message LUNA" placeholder="Type to LUNA. Enter sends, Shift+Enter is a new line."></textarea>
+            <button type="submit">Send</button>
+          </form>
+          <div id="camera" phx-hook="Camera" phx-update="ignore">
+            <div class="camera-view" hidden>
+              <video autoplay playsinline muted></video>
+              <div class="row">
+                <select aria-label="Camera"></select>
+                <button type="button" data-action="snap">Show LUNA</button>
+                <button type="button" data-action="close">Close camera</button>
+              </div>
+            </div>
+            <div class="attachment" hidden>
+              <img alt="Image for LUNA" />
+              <button type="button" data-action="drop">Remove image</button>
+            </div>
+            <button type="button" class="quiet" data-action="open">Camera</button>
+          </div>
+        </div>
+
+        <div class="column readouts" aria-label="Activity">
+          <div class="panel">
+            <p class="label">Task · live</p>
+            <p class="hint">Each tool call of LUNA shows here as it runs. It comes with the event stream.</p>
+          </div>
+          <div class="panel">
+            <p class="label">Approvals</p>
+            <p class="figure">{length(@approvals)} waiting</p>
+            <button :if={@approvals != []} class="quiet" phx-click="show" phx-value-panel="approvals">Open approvals</button>
+          </div>
+          <div class="panel globe">
+            <svg viewBox="0 0 100 100" aria-hidden="true">
+              <circle cx="50" cy="50" r="46" /><ellipse cx="50" cy="50" rx="20" ry="46" /><ellipse cx="50" cy="50" rx="38" ry="46" />
+              <line x1="4" y1="50" x2="96" y2="50" /><ellipse cx="50" cy="30" rx="40" ry="6" /><ellipse cx="50" cy="70" rx="40" ry="6" />
+            </svg>
+            <div>
+              <p class="label">Globe</p>
+              <p class="hint">God's Eye View on luna. It comes later.</p>
             </div>
           </div>
-          <div class="attachment" hidden>
-            <img alt="Image for LUNA" />
-            <button type="button" data-action="drop">Remove image</button>
-          </div>
-          <button type="button" data-action="open">Camera</button>
         </div>
-        <button
-          id="talk"
-          phx-hook="Talk"
-          class={"talk " <> @presence}
-          type="button"
-          aria-label="Hold to talk to LUNA"
-        >
-          {talk_label(@presence)}
-        </button>
-        <form id="composer" phx-hook="Composer" phx-update="ignore">
-          <textarea name="text" rows="2" placeholder="Message LUNA. Enter sends, Shift+Enter is a new line."></textarea>
-          <button type="submit">Send</button>
-        </form>
       </section>
 
-      <section :if={@panel == "approvals"} id="approvals">
-        <p :if={@approvals == []} class="muted">No requests wait for you.</p>
-        <div :for={item <- @approvals} class="card">
-          <div>{item["summary"]}</div>
-          <div class="muted">{item["id"]} - {item["created"]}</div>
+      <section :if={@panel == "approvals"} id="approvals" class="sheet">
+        <p :if={@approvals == []} class="hint">No requests wait for you.</p>
+        <div :for={item <- @approvals} class="panel">
+          <p class="text">{item["summary"]}</p>
+          <p class="hint">{item["id"]} · {item["created"]}</p>
           <div class="row">
             <button phx-click="decide" phx-value-id={item["id"]} phx-value-action="approve">Approve</button>
             <button phx-click="decide" phx-value-id={item["id"]} phx-value-action="deny">Deny</button>
@@ -412,15 +469,15 @@ defmodule LunaWeb.HomeLive do
         </div>
       </section>
 
-      <section :if={@panel == "money"} id="money">
-        <pre>{@money || "Loading..."}</pre>
+      <section :if={@panel == "money"} id="money" class="sheet">
+        <pre class="panel">{@money || "Loading…"}</pre>
       </section>
 
-      <section :if={@panel == "memory"} id="memory">
+      <section :if={@panel == "memory"} id="memory" class="sheet">
         <div class="row memory-bar">
-          <button phx-click="memory-view" phx-value-view="graph" class={if @memory_view == "graph", do: "active"}>Graph</button>
-          <button phx-click="memory-view" phx-value-view="map" class={if @memory_view == "map", do: "active"}>Mind map</button>
-          <span class="muted">{@memory_count} notes</span>
+          <button phx-click="memory-view" phx-value-view="graph" class={if @memory_view == "graph", do: "tab active", else: "tab"}>Graph</button>
+          <button phx-click="memory-view" phx-value-view="map" class={if @memory_view == "map", do: "tab active", else: "tab"}>Mind map</button>
+          <span class="hint">{@memory_count} notes</span>
         </div>
         <div id="memory-graph" phx-hook="MemoryGraph" phx-update="ignore" data-view={@memory_view}>
           <input type="search" placeholder="Find a note" aria-label="Find a note" />
@@ -429,20 +486,45 @@ defmodule LunaWeb.HomeLive do
         </div>
       </section>
 
-      <section :if={@panel == "system"} id="system">
-        <table :if={@system}>
-          <tr><td class="muted">Started</td><td>{@system["started"]}</td></tr>
-          <tr><td class="muted">Updates</td><td>{@system["update"]}</td></tr>
-          <tr><td class="muted">Memory</td><td>{@system["memory"]}</td></tr>
-          <tr><td class="muted">Waiting approvals</td><td>{@system["pending_approvals"]}</td></tr>
+      <section :if={@panel == "system"} id="system" class="sheet">
+        <div class="row">
+          <span class="label">Presence style</span>
+          <button
+            :for={style <- ["orb", "ring"]}
+            phx-click="presence-style"
+            phx-value-style={style}
+            class={if @presence_style == style, do: "tab active", else: "tab"}
+          >
+            {String.capitalize(style)}
+          </button>
+        </div>
+        <table :if={@system} class="panel">
+          <tr><td class="label">Started</td><td>{@system["started"]}</td></tr>
+          <tr><td class="label">Updates</td><td>{@system["update"]}</td></tr>
+          <tr><td class="label">Memory</td><td>{@system["memory"]}</td></tr>
+          <tr><td class="label">Waiting approvals</td><td>{@system["pending_approvals"]}</td></tr>
           <tr :for={{key, value} <- @system["settings"] || %{}}>
-            <td class="muted">{key}</td><td>{setting(value)}</td>
+            <td class="label">{key}</td><td>{setting(value)}</td>
           </tr>
         </table>
-        <h3 :if={@system}>Recent events</h3>
-        <pre :if={@system}>{Enum.map_join(@system["events"] || [], "\n", &event_line/1)}</pre>
+        <p :if={@system} class="label">Recent events</p>
+        <pre :if={@system} class="panel">{Enum.map_join(@system["events"] || [], "\n", &event_line/1)}</pre>
       </section>
     </main>
     """
   end
+
+  # The line under the word mark: the model and the size of the memory.
+  defp status_line(nil, count), do: "Shared memory · #{count} notes"
+
+  defp status_line(system, count) do
+    model = get_in(system, ["settings", "model"]) || "model"
+    "Cloud · #{model} · shared memory · #{count} notes"
+  end
+
+  defp state_label("listening"), do: "Listening"
+  defp state_label("thinking"), do: "Thinking"
+  defp state_label("speaking"), do: "Speaking"
+  defp state_label("error"), do: "Error"
+  defp state_label(_), do: "Standing by"
 end

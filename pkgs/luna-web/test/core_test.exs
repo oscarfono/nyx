@@ -66,7 +66,7 @@ defmodule LunaWeb.CoreTest do
     conn = build_conn() |> put_req_header("tailscale-user-login", @owner) |> get("/")
     body = html_response(conn, 200)
 
-    for label <- ["Chat", "Approvals", "Money", "Memory", "System"], do: assert(body =~ label)
+    for label <- ["Console", "Memory", "Money", "Approvals", "System"], do: assert(body =~ label)
 
     assert body =~ ~s(phx-hook="Camera")
   end

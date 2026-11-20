@@ -26,7 +26,7 @@ defmodule LunaWeb.Endpoint do
 
   # "no-cache": the browser keeps a file, but asks luna each time (the ETag
   # gives a short 304). Without it, a browser can use an old app.js after a deploy.
-  plug Plug.Static, at: "/", from: :luna_web, only: ~w(app.js app.css mic-worklet.js), cache_control_for_etags: "no-cache"
+  plug Plug.Static, at: "/", from: :luna_web, only: ~w(app.js app.css mic-worklet.js fonts), cache_control_for_etags: "no-cache"
   plug Plug.Static, at: "/vendor", from: {:phoenix, "priv/static"}, only: ~w(phoenix.min.js), cache_control_for_etags: "no-cache"
   plug Plug.Static, at: "/vendor", from: {:phoenix_live_view, "priv/static"}, only: ~w(phoenix_live_view.min.js), cache_control_for_etags: "no-cache"
 

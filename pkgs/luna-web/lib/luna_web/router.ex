@@ -5,7 +5,7 @@ defmodule LunaWeb.Router do
   import Phoenix.LiveView.Router
 
   # The same policy as the Python app. The page loads scripts from the app only.
-  @csp "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; " <>
+  @csp "default-src 'none'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' data: blob:; " <>
          "media-src 'self' blob:; connect-src 'self'; base-uri 'none'; form-action 'none'; " <>
          "frame-ancestors 'none'"
 

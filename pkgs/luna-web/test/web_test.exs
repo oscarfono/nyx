@@ -38,6 +38,7 @@ defmodule LunaWeb.WebTest do
     assert body =~ "<title>LUNA</title>"
     [csp] = get_resp_header(conn, "content-security-policy")
     assert csp =~ "script-src 'self'"
+    assert csp =~ "font-src 'self'"
     assert get_resp_header(conn, "x-content-type-options") == ["nosniff"]
     assert get_resp_header(conn, "cache-control") == ["no-store"]
   end
