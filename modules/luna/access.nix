@@ -21,8 +21,11 @@ in
 
   security.sudo.wheelNeedsPassword = true;
 
+  # sshd runs during the bootstrap only. After the bootstrap, tailscaled
+  # serves all SSH on the tailnet (Tailscale SSH). The Vultr console is the
+  # way in when Tailscale fails.
   services.openssh = {
-    enable = true;
+    enable = site.bootstrap;
     openFirewall = site.bootstrap;
     # The ed25519 key from `make host-key` is the only host key. Without this
     # line, NixOS also makes an RSA key, and sops-nix tries to read it as a

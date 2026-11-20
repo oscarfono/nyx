@@ -10,15 +10,17 @@ from anthropic import beta_async_tool
 
 from .audit import AuditLog
 from .memory import Memory, MemoryAccessError
+from .privacy import Taint, is_sensitive, write_refusal
 
 # Server tools run at Anthropic. Their results are untrusted text (tier 0).
+# Both tools also send data out, so a tainted conversation loses them.
 SERVER_TOOLS: list[dict[str, Any]] = [
     {"type": "web_search_20260209", "name": "web_search", "max_uses": 5},
     {"type": "web_fetch_20260209", "name": "web_fetch", "max_uses": 5},
 ]
 
 
-def build_tools(memory: Memory, audit: AuditLog, now: Callable[[], datetime]) -> list[Any]:
+def build_tools(memory: Memory, audit: AuditLog, now: Callable[[], datetime], taint: Taint) -> list[Any]:
     @beta_async_tool
     async def memory_files() -> str:
         """List the files in the LUNA memory."""
@@ -37,6 +39,8 @@ def build_tools(memory: Memory, audit: AuditLog, now: Callable[[], datetime]) ->
             hits = memory.search(query)
         except MemoryAccessError as error:
             return f"Error: {error}"
+        if any(is_sensitive(hit.split(":", 1)[0]) for hit in hits):
+            taint.mark("memory_search found money data")
         return "\n".join(hits) or "No match."
 
     @beta_async_tool
@@ -48,9 +52,12 @@ def build_tools(memory: Memory, audit: AuditLog, now: Callable[[], datetime]) ->
         """
         audit.write("tool", name="memory_read", path=path)
         try:
-            return memory.read(path)
+            text = memory.read(path)
         except MemoryAccessError as error:
             return f"Error: {error}"
+        if is_sensitive(path):
+            taint.mark(f"memory_read {path}")
+        return text
 
     @beta_async_tool
     async def memory_append(path: str, heading: str, body: str) -> str:
@@ -62,6 +69,10 @@ def build_tools(memory: Memory, audit: AuditLog, now: Callable[[], datetime]) ->
             body: The body of the entry, in org-mode text.
         """
         audit.write("tool", name="memory_append", path=path, heading=heading)
+        refusal = write_refusal(taint, path)
+        if refusal is not None:
+            audit.write("tool.refused", name="memory_append", path=path, reason="taint")
+            return refusal
         try:
             return memory.append(path, heading, body, now())
         except MemoryAccessError as error:

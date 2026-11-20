@@ -13,6 +13,7 @@
     ./tools.nix
     ./theme.nix
     ./agents.nix
+    ./luna.nix
     ./treesitter.nix
     ./languages.nix
     ./dictation.nix

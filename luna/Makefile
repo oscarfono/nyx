@@ -15,7 +15,7 @@ SSH_KEY   ?= $(HOME)/.ssh/luna_ed25519
 BOOTSTRAP := $(HOME)/.local/state/luna/bootstrap
 DEV       := nix develop $(FLAKE) --command
 
-.PHONY: help tangle check build install deploy host-key forget-host-key secrets matrix-users logs audit
+.PHONY: help tangle check build install deploy host-key forget-host-key secrets matrix-users money-upload logs audit
 
 help:
 	@echo "tangle           Make the build files from $(ORG)."
@@ -27,6 +27,7 @@ help:
 	@echo "install          Install NixOS on the VPS. Set VPS_IP. ERASES THE VPS DISK."
 	@echo "matrix-users     Make the Matrix accounts for $(OWNER) and luna."
 	@echo "deploy           Deploy the configuration over the tailnet."
+	@echo "money-upload     Send bank exports to the luna inbox. Set FILES."
 	@echo "logs             Show the luna-core log."
 	@echo "audit            Show the end of the audit log."
 
@@ -78,6 +79,12 @@ matrix-users:
 
 deploy: check
 	nixos-rebuild switch --flake $(FLAKE)#$(HOST) --target-host root@$(HOST)
+
+# The inbox is outside git. The import deletes each file after the import.
+money-upload:
+	test -n "$(FILES)" || { echo "Set FILES. Example: make money-upload FILES='~/Downloads/*.csv'"; exit 1; }
+	scp $(FILES) $(OWNER)@$(HOST):/var/lib/luna/inbox/
+	echo "Uploaded. Delete the local copies when you no longer need them."
 
 logs:
 	ssh root@$(HOST) journalctl -u luna-core -n 200 --no-pager

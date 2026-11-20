@@ -10,6 +10,7 @@ from .agent import Agent
 from .audit import AuditLog
 from .matrix_bot import Bot
 from .memory import Memory, MemoryAccessError
+from .sysinfo import update_notice
 
 BRIEF_PROMPT = """\
 Write the morning brief for today. First read roster.org, money.org,
@@ -37,6 +38,9 @@ async def brief_loop(make_agent: Callable[[], Agent], bot: Bot, audit: AuditLog,
         await asyncio.sleep((next_run(now, at) - now).total_seconds())
         try:
             text = await agent.ask(BRIEF_PROMPT)
+            notice = update_notice(agent.now().date())
+            if notice is not None:
+                text = f"{notice}\n\n{text}"
             await bot.send_owner(text)
             audit.write("brief.sent")
         except Exception as error:  # noqa: BLE001 - the loop must not stop

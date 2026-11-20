@@ -25,7 +25,7 @@ async def run() -> None:
 
     def make_agent() -> Agent:
         agent = Agent(config, [], audit)
-        agent.tools = build_tools(memory, audit, agent.now)
+        agent.tools = build_tools(memory, audit, agent.now, agent.taint)
         return agent
 
     chat_agent = make_agent()

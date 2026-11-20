@@ -21,6 +21,10 @@ in
         }
       ];
       database.name = "sqlite3";
+      # Room version 12 (MSC4291) makes room IDs with no server part.
+      # ement.el refuses such a room ID. Room version 11 works with all
+      # clients.
+      default_room_version = "11";
       enable_registration = false;
       federation_domain_whitelist = [ ];
       allow_public_rooms_over_federation = false;

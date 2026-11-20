@@ -100,6 +100,8 @@ class Bot:
             visibility=RoomVisibility.private,
             name="LUNA",
             topic="Private chat with LUNA. This room is not end-to-end encrypted.",
+            # ement.el needs a room ID with a server part. Version 12 has none.
+            room_version="11",
             is_direct=True,
             preset=RoomPreset.trusted_private_chat,
             invite=[self.config.owner],

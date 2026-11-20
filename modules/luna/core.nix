@@ -14,6 +14,28 @@ let
       "telegram_chat_id:${secret "telegram-chat-id"}"
     ];
 
+  # The hub refuses raw bank exports. Raw exports go to the inbox, not to git.
+  preReceive = pkgs.writeShellScript "luna-memory-pre-receive" ''
+    set -euo pipefail
+    export PATH=${lib.makeBinPath [ pkgs.git pkgs.coreutils pkgs.gnugrep ]}
+    zero=0000000000000000000000000000000000000000
+    status=0
+    while read -r old new ref; do
+      [ "$new" = "$zero" ] && continue
+      if [ "$old" = "$zero" ]; then range="$new --not --all"; else range="$old..$new"; fi
+      # shellcheck disable=SC2086
+      bad=$(git log --name-only --diff-filter=AM --format= $range \
+        | grep -iE '\.(csv|ofx|qif|qfx|xls|xlsx|pdf)$' || true)
+      if [ -n "$bad" ]; then
+        echo "LUNA: the memory refuses raw bank exports and statements:" >&2
+        echo "$bad" | sed 's/^/  /' >&2
+        echo "LUNA: send exports with 'make money-upload FILES=...'." >&2
+        status=1
+      fi
+    done
+    exit $status
+  '';
+
   memoryInit = pkgs.writeShellScript "luna-memory-init" ''
     set -euo pipefail
     export PATH=${lib.makeBinPath [ pkgs.git pkgs.coreutils pkgs.findutils ]}
@@ -25,6 +47,9 @@ let
     if [ ! -d "$hub" ]; then
       git init --bare --shared=group --initial-branch=main "$hub"
     fi
+    # Install the hook at each start, so the hook follows the configuration.
+    cat ${preReceive} > "$hub/hooks/pre-receive"
+    chmod 0775 "$hub/hooks/pre-receive"
     if [ ! -d "$work/.git" ]; then
       git clone "$hub" "$work"
     fi
@@ -74,6 +99,9 @@ in
   systemd.tmpfiles.rules = [
     "d ${stateDir} 2750 luna luna -"
     "d ${stateDir}/approvals 0700 luna luna -"
+    # The upload inbox for raw bank exports. The owner can write, luna reads.
+    # The import deletes each file after the import.
+    "d ${stateDir}/inbox 2770 luna luna -"
     "d ${stateDir}/audit 0750 luna luna -"
     "f ${stateDir}/audit/audit.jsonl 0640 luna luna -"
     "h ${stateDir}/audit/audit.jsonl - - - - +a"
