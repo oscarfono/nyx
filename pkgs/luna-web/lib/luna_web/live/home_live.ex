@@ -7,7 +7,7 @@ defmodule LunaWeb.HomeLive do
 
   alias LunaWeb.{Core, Voice}
 
-  @panels ~w(chat approvals money system)
+  @panels ~w(chat approvals money memory system)
   # The presence states. "working" comes in stage E4, when the core streams tool events.
   @styles ~w(orb ring)
   @refresh :timer.seconds(30)
@@ -32,6 +32,8 @@ defmodule LunaWeb.HomeLive do
         notice: nil,
         presence: "idle",
         presence_style: "orb",
+        memory_view: "graph",
+        memory_count: 0,
         voice: [],
         voice_bytes: 0,
         turn: 0
@@ -56,6 +58,7 @@ defmodule LunaWeb.HomeLive do
         "approvals" -> load_approvals(socket)
         "money" -> load(socket, :money, Core.money())
         "system" -> load(socket, :system, Core.system())
+        "memory" -> load_memory(socket)
         "chat" -> socket
       end
 
@@ -154,6 +157,18 @@ defmodule LunaWeb.HomeLive do
   end
 
   def handle_event("presence-style", _params, socket), do: {:noreply, socket}
+
+  # The page draws the graph. The view is "graph" (force) or "map" (mind map).
+  def handle_event("memory-view", %{"view" => view}, socket) when view in ["graph", "map"] do
+    {:noreply, socket |> assign(memory_view: view) |> push_event("memory-view", %{view: view})}
+  end
+
+  def handle_event("memory-view", _params, socket), do: {:noreply, socket}
+
+  # A tap on a note in the graph opens the mind map around it.
+  def handle_event("memory-focus", %{"id" => id}, socket) when is_binary(id) do
+    {:noreply, socket |> assign(memory_view: "map") |> push_event("memory-view", %{view: "map", focus: id})}
+  end
 
   def handle_event("decide", %{"id" => id, "action" => action}, socket) do
     notice =
@@ -268,6 +283,18 @@ defmodule LunaWeb.HomeLive do
     end
   end
 
+  defp load_memory(socket) do
+    case Core.memory_graph() do
+      {:ok, graph} ->
+        socket
+        |> assign(memory_count: length(graph["nodes"] || []))
+        |> push_event("memory-graph", %{nodes: graph["nodes"] || [], links: graph["links"] || [], view: socket.assigns.memory_view})
+
+      {:error, text} ->
+        assign(socket, notice: text)
+    end
+  end
+
   defp load(socket, key, {:ok, value}), do: assign(socket, key, value)
   defp load(socket, _key, {:error, text}), do: assign(socket, notice: text)
 
@@ -326,7 +353,7 @@ defmodule LunaWeb.HomeLive do
       </div>
       <nav>
         <button
-          :for={{panel, label} <- [{"chat", "Chat"}, {"approvals", "Approvals"}, {"money", "Money"}, {"system", "System"}]}
+          :for={{panel, label} <- [{"chat", "Chat"}, {"approvals", "Approvals"}, {"money", "Money"}, {"memory", "Memory"}, {"system", "System"}]}
           phx-click="show"
           phx-value-panel={panel}
           class={if @panel == panel, do: "active"}
@@ -387,6 +414,19 @@ defmodule LunaWeb.HomeLive do
 
       <section :if={@panel == "money"} id="money">
         <pre>{@money || "Loading..."}</pre>
+      </section>
+
+      <section :if={@panel == "memory"} id="memory">
+        <div class="row memory-bar">
+          <button phx-click="memory-view" phx-value-view="graph" class={if @memory_view == "graph", do: "active"}>Graph</button>
+          <button phx-click="memory-view" phx-value-view="map" class={if @memory_view == "map", do: "active"}>Mind map</button>
+          <span class="muted">{@memory_count} notes</span>
+        </div>
+        <div id="memory-graph" phx-hook="MemoryGraph" phx-update="ignore" data-view={@memory_view}>
+          <input type="search" placeholder="Find a note" aria-label="Find a note" />
+          <canvas aria-label="The long-term memory graph"></canvas>
+          <p class="memory-title" aria-live="polite"></p>
+        </div>
       </section>
 
       <section :if={@panel == "system"} id="system">

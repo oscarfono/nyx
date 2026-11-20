@@ -62,3 +62,11 @@ td { padding: 4px 8px; border-bottom: 1px solid var(--line); overflow-wrap: anyw
         user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
 .talk.listening { border-color: #3fb950; color: #3fb950; }
 .msg.voice::before { content: "\1F399  "; }
+/* The Memory panel. */
+#memory-graph { position: relative; }
+#memory-graph input { width: 100%; margin-bottom: 8px; background: var(--panel); color: var(--text);
+                      border: 1px solid var(--line); border-radius: 6px; padding: 8px; font: inherit; }
+#memory-graph canvas { display: block; width: 100%; background: var(--panel); border: 1px solid var(--line);
+                       border-radius: 8px; touch-action: none; cursor: grab; }
+.memory-bar button.active { border-color: var(--accent); color: var(--accent); }
+.memory-title { min-height: 1.5em; color: var(--muted); margin: 6px 0 0; }

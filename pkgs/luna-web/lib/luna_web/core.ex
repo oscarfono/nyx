@@ -54,6 +54,9 @@ defmodule LunaWeb.Core do
 
   def system, do: request(:get, "/api/system")
 
+  @doc "The long-term memory graph: titles, tags and links. No note text."
+  def memory_graph, do: request(:get, "/api/memory/graph")
+
   @doc "Checks an image from the page. nil is no image."
   def check_image(nil), do: {:ok, nil}
 

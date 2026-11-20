@@ -54,6 +54,10 @@ defmodule LunaWeb.CoreTest do
     assert text =~ "Money is off"
   end
 
+  test "the memory graph" do
+    assert {:ok, %{"nodes" => [_, _], "links" => [%{"source" => "a", "target" => "b"}]}} = Core.memory_graph()
+  end
+
   test "the system panel" do
     assert {:ok, %{"pending_approvals" => 0, "update" => _}} = Core.system()
   end
@@ -62,7 +66,7 @@ defmodule LunaWeb.CoreTest do
     conn = build_conn() |> put_req_header("tailscale-user-login", @owner) |> get("/")
     body = html_response(conn, 200)
 
-    for label <- ["Chat", "Approvals", "Money", "System"], do: assert(body =~ label)
+    for label <- ["Chat", "Approvals", "Money", "Memory", "System"], do: assert(body =~ label)
 
     assert body =~ ~s(phx-hook="Camera")
   end

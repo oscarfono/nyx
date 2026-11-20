@@ -9055,10 +9055,27 @@ LUNA does not need the SQLite database of org-roam. The core reads the files.
 | Part | Result                                                               | State |
 |------+----------------------------------------------------------------------+-------|
 | M1   | The roam engine and the memory tools in the core. The graph in the core API. | Done |
-| M2   | The Memory panel: the force graph and the mind map                    | Next  |
-| M3   | Move the notes of Coops to =roam/=. Point Emacs at the clone of the hub. Coops does this. | |
+| M2   | The Memory panel: the force graph and the mind map                    | Done  |
+| M3   | Move the notes of Coops to =roam/=. Point Emacs at the clone of the hub. Coops does this. | Next |
 | M4   | An overnight job: the conversations of the day become notes and links (backlog #9) | |
 | M5   | Semantic recall with a local embedding model (backlog #24)            |       |
+
+** Memory panel
+
+The Memory panel on the page has two views. Our own code draws them on a canvas.
+The page loads no graph library.
+- *Graph:* a force layout. Notes push apart, and links pull them together.
+  A hub (3 links or more) always has a label.
+- *Mind map:* one note in the centre. Its links and backlinks are on ring 1.
+  Their neighbours are on ring 2.
+
+The colour of a note comes from its first tag. A LUNA note has an accent ring.
+Pan with a drag, zoom with the wheel or two fingers, and drag a note in the graph.
+A tap on a note in the graph opens the mind map around it. A tap in the mind map
+moves the centre to that note. Enter in the search box opens the first match.
+The camera fits the notes until you pan or zoom.
+
+The page gets titles, tags and links only. It never gets the text of a note.
 
 ** Roam engine
 
@@ -9948,6 +9965,9 @@ defmodule LunaWeb.Core do
 
   def system, do: request(:get, "/api/system")
 
+  @doc "The long-term memory graph: titles, tags and links. No note text."
+  def memory_graph, do: request(:get, "/api/memory/graph")
+
   @doc "Checks an image from the page. nil is no image."
   def check_image(nil), do: {:ok, nil}
 
@@ -10563,7 +10583,7 @@ defmodule LunaWeb.HomeLive do
 
   alias LunaWeb.{Core, Voice}
 
-  @panels ~w(chat approvals money system)
+  @panels ~w(chat approvals money memory system)
   # The presence states. "working" comes in stage E4, when the core streams tool events.
   @styles ~w(orb ring)
   @refresh :timer.seconds(30)
@@ -10588,6 +10608,8 @@ defmodule LunaWeb.HomeLive do
         notice: nil,
         presence: "idle",
         presence_style: "orb",
+        memory_view: "graph",
+        memory_count: 0,
         voice: [],
         voice_bytes: 0,
         turn: 0
@@ -10612,6 +10634,7 @@ defmodule LunaWeb.HomeLive do
         "approvals" -> load_approvals(socket)
         "money" -> load(socket, :money, Core.money())
         "system" -> load(socket, :system, Core.system())
+        "memory" -> load_memory(socket)
         "chat" -> socket
       end
 
@@ -10710,6 +10733,18 @@ defmodule LunaWeb.HomeLive do
   end
 
   def handle_event("presence-style", _params, socket), do: {:noreply, socket}
+
+  # The page draws the graph. The view is "graph" (force) or "map" (mind map).
+  def handle_event("memory-view", %{"view" => view}, socket) when view in ["graph", "map"] do
+    {:noreply, socket |> assign(memory_view: view) |> push_event("memory-view", %{view: view})}
+  end
+
+  def handle_event("memory-view", _params, socket), do: {:noreply, socket}
+
+  # A tap on a note in the graph opens the mind map around it.
+  def handle_event("memory-focus", %{"id" => id}, socket) when is_binary(id) do
+    {:noreply, socket |> assign(memory_view: "map") |> push_event("memory-view", %{view: "map", focus: id})}
+  end
 
   def handle_event("decide", %{"id" => id, "action" => action}, socket) do
     notice =
@@ -10824,6 +10859,18 @@ defmodule LunaWeb.HomeLive do
     end
   end
 
+  defp load_memory(socket) do
+    case Core.memory_graph() do
+      {:ok, graph} ->
+        socket
+        |> assign(memory_count: length(graph["nodes"] || []))
+        |> push_event("memory-graph", %{nodes: graph["nodes"] || [], links: graph["links"] || [], view: socket.assigns.memory_view})
+
+      {:error, text} ->
+        assign(socket, notice: text)
+    end
+  end
+
   defp load(socket, key, {:ok, value}), do: assign(socket, key, value)
   defp load(socket, _key, {:error, text}), do: assign(socket, notice: text)
 
@@ -10882,7 +10929,7 @@ defmodule LunaWeb.HomeLive do
       </div>
       <nav>
         <button
-          :for={{panel, label} <- [{"chat", "Chat"}, {"approvals", "Approvals"}, {"money", "Money"}, {"system", "System"}]}
+          :for={{panel, label} <- [{"chat", "Chat"}, {"approvals", "Approvals"}, {"money", "Money"}, {"memory", "Memory"}, {"system", "System"}]}
           phx-click="show"
           phx-value-panel={panel}
           class={if @panel == panel, do: "active"}
@@ -10945,6 +10992,19 @@ defmodule LunaWeb.HomeLive do
         <pre>{@money || "Loading..."}</pre>
       </section>
 
+      <section :if={@panel == "memory"} id="memory">
+        <div class="row memory-bar">
+          <button phx-click="memory-view" phx-value-view="graph" class={if @memory_view == "graph", do: "active"}>Graph</button>
+          <button phx-click="memory-view" phx-value-view="map" class={if @memory_view == "map", do: "active"}>Mind map</button>
+          <span class="muted">{@memory_count} notes</span>
+        </div>
+        <div id="memory-graph" phx-hook="MemoryGraph" phx-update="ignore" data-view={@memory_view}>
+          <input type="search" placeholder="Find a note" aria-label="Find a note" />
+          <canvas aria-label="The long-term memory graph"></canvas>
+          <p class="memory-title" aria-live="polite"></p>
+        </div>
+      </section>
+
       <section :if={@panel == "system"} id="system">
         <table :if={@system}>
           <tr><td class="muted">Started</td><td>{@system["started"]}</td></tr>
@@ -10965,7 +11025,7 @@ end
 #+end_src
 
 #+begin_src js :tangle ../pkgs/luna-web/priv/static/app.js
-// The LiveView socket and four hooks. phoenix.min.js and
+// The LiveView socket and five hooks. phoenix.min.js and
 // phoenix_live_view.min.js load first and set the globals Phoenix and LiveView.
 (function () {
   "use strict";
@@ -11257,10 +11317,324 @@ end
     }
   };
 
+  // The long-term memory: a force graph, or a mind map around one note.
+  // Our own code: the page loads no graph library, and no file from the internet.
+  var MemoryGraph = {
+    mounted: function () {
+      var hook = this;
+      var root = this.el;
+      var canvas = root.querySelector("canvas");
+      var search = root.querySelector("input");
+      var label = root.querySelector(".memory-title");
+      var ctx = canvas.getContext("2d");
+      var reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      var nodes = [], links = [], byId = {}, near = {};
+      var view = root.dataset.view || "graph";
+      var focus = null, hover = null, match = "";
+      var cam = { x: 0, y: 0, k: 1 };
+      var alpha = 0, frame = null, drag = null, pointers = {};
+
+      var css = function (name, fallback) {
+        return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback;
+      };
+      var hue = function (tag) {
+        var h = 0;
+        for (var i = 0; i < tag.length; i++) h = (h * 31 + tag.charCodeAt(i)) % 360;
+        return h;
+      };
+      var colour = function (n) {
+        return n.tags && n.tags.length ? "hsl(" + hue(n.tags[0]) + ", 55%, 55%)" : css("--muted", "#888");
+      };
+
+      var size = function () {
+        var ratio = window.devicePixelRatio || 1;
+        var w = root.clientWidth, h = Math.max(320, Math.round(window.innerHeight * 0.65));
+        canvas.style.width = w + "px";
+        canvas.style.height = h + "px";
+        canvas.width = Math.round(w * ratio);
+        canvas.height = Math.round(h * ratio);
+        ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+        hook.w = w;
+        hook.h = h;
+      };
+
+      var setData = function (data) {
+        var old = byId;
+        byId = {};
+        near = {};
+        nodes = (data.nodes || []).map(function (n, i) {
+          var o = old[n.id];
+          var a = i * 2.399963;
+          var node = { id: n.id, title: n.title, tags: n.tags || [], owner: n.owner,
+                       x: o ? o.x : Math.cos(a) * 12 * Math.sqrt(i + 1), y: o ? o.y : Math.sin(a) * 12 * Math.sqrt(i + 1),
+                       vx: 0, vy: 0, tx: null, ty: null };
+          byId[n.id] = node;
+          near[n.id] = [];
+          return node;
+        });
+        links = (data.links || []).filter(function (l) { return byId[l.source] && byId[l.target]; })
+          .map(function (l) {
+            near[l.source].push(l.target);
+            near[l.target].push(l.source);
+            return { s: byId[l.source], t: byId[l.target] };
+          });
+        if (!focus || !byId[focus]) focus = nodes.length ? busiest() : null;
+        layout();
+      };
+
+      var busiest = function () {
+        var best = nodes[0];
+        nodes.forEach(function (n) { if (near[n.id].length > near[best.id].length) best = n; });
+        return best.id;
+      };
+
+      // The force graph: nodes push apart, links pull together, all pull to the centre.
+      var tick = function () {
+        var i, j, a, b, dx, dy, d2, f;
+        for (i = 0; i < nodes.length; i++) {
+          a = nodes[i];
+          for (j = i + 1; j < nodes.length; j++) {
+            b = nodes[j];
+            dx = a.x - b.x; dy = a.y - b.y; d2 = dx * dx + dy * dy;
+            // A floor on the distance stops a very large push between near nodes.
+            if (d2 < 100) d2 = 100;
+            f = 600 / d2;
+            a.vx += dx * f; a.vy += dy * f; b.vx -= dx * f; b.vy -= dy * f;
+          }
+        }
+        links.forEach(function (l) {
+          dx = l.t.x - l.s.x; dy = l.t.y - l.s.y;
+          var d = Math.sqrt(dx * dx + dy * dy) || 1;
+          f = (d - 70) * 0.02 / d;
+          l.s.vx += dx * f; l.s.vy += dy * f; l.t.vx -= dx * f; l.t.vy -= dy * f;
+        });
+        nodes.forEach(function (n) {
+          n.vx -= n.x * 0.01; n.vy -= n.y * 0.01;
+          if (drag && drag.node === n) { n.vx = 0; n.vy = 0; return; }
+          n.vx *= 0.6; n.vy *= 0.6;
+          // A speed limit keeps the graph stable.
+          var speed = Math.sqrt(n.vx * n.vx + n.vy * n.vy);
+          if (speed > 12) { n.vx *= 12 / speed; n.vy *= 12 / speed; }
+          n.x += n.vx * alpha; n.y += n.vy * alpha;
+        });
+        alpha *= 0.985;
+      };
+
+      // The mind map: the focus in the centre, its neighbours on ring 1, theirs on ring 2.
+      var mindMap = function () {
+        nodes.forEach(function (n) { n.tx = null; n.ring = null; });
+        if (!focus) return;
+        var centre = byId[focus];
+        centre.tx = 0; centre.ty = 0; centre.ring = 0;
+        var ring1 = near[focus].filter(function (id, i, all) { return all.indexOf(id) === i && id !== focus; });
+        var seen = {};
+        seen[focus] = true;
+        ring1.forEach(function (id) { seen[id] = true; });
+        var step = (Math.PI * 2) / Math.max(ring1.length, 1);
+        ring1.forEach(function (id, i) {
+          var a = i * step - Math.PI / 2;
+          var n = byId[id];
+          n.tx = Math.cos(a) * 150; n.ty = Math.sin(a) * 150; n.ring = 1;
+          var kids = near[id].filter(function (k) { if (seen[k]) return false; seen[k] = true; return true; });
+          kids.forEach(function (k, j) {
+            var spread = step * 0.8;
+            var b = a - spread / 2 + spread * (kids.length === 1 ? 0.5 : j / (kids.length - 1));
+            var c = byId[k];
+            c.tx = Math.cos(b) * 290; c.ty = Math.sin(b) * 290; c.ring = 2;
+          });
+        });
+      };
+
+      var layout = function () {
+        fitted = true;
+        if (view === "map") {
+          mindMap();
+          if (reduce) nodes.forEach(function (n) { if (n.tx !== null) { n.x = n.tx; n.y = n.ty; } });
+        } else {
+          alpha = 1;
+          if (reduce) { for (var i = 0; i < 300; i++) tick(); alpha = 0; }
+        }
+        run();
+      };
+
+      var shown = function (n) { return view === "graph" || n.ring !== null; };
+
+      // Fit the camera to the shown nodes, until the owner pans or zooms.
+      var fitted = true;
+      var fit = function () {
+        if (!fitted) return;
+        var xs = [], ys = [];
+        nodes.forEach(function (n) {
+          if (!shown(n)) return;
+          xs.push(view === "map" && n.tx !== null ? n.tx : n.x);
+          ys.push(view === "map" && n.tx !== null ? n.ty : n.y);
+        });
+        if (!xs.length) return;
+        var minX = Math.min.apply(null, xs), maxX = Math.max.apply(null, xs);
+        var minY = Math.min.apply(null, ys), maxY = Math.max.apply(null, ys);
+        var k = Math.min((hook.w - 80) / Math.max(maxX - minX, 1), (hook.h - 80) / Math.max(maxY - minY, 1));
+        cam.k = Math.min(2, Math.max(0.2, k));
+        cam.x = -((minX + maxX) / 2) * cam.k;
+        cam.y = -((minY + maxY) / 2) * cam.k;
+      };
+
+      var draw = function () {
+        var w = hook.w, h = hook.h;
+        ctx.clearRect(0, 0, w, h);
+        ctx.save();
+        ctx.translate(w / 2 + cam.x, h / 2 + cam.y);
+        ctx.scale(cam.k, cam.k);
+        ctx.lineWidth = 1 / cam.k;
+        ctx.strokeStyle = css("--line", "#444");
+        links.forEach(function (l) {
+          if (!shown(l.s) || !shown(l.t)) return;
+          ctx.beginPath(); ctx.moveTo(l.s.x, l.s.y); ctx.lineTo(l.t.x, l.t.y); ctx.stroke();
+        });
+        var text = css("--text", "#eee"), accent = css("--accent", "#b392f0");
+        ctx.font = (12 / cam.k) + "px system-ui, sans-serif";
+        ctx.lineJoin = "round";
+        ctx.textAlign = "center";
+        nodes.forEach(function (n) {
+          if (!shown(n)) return;
+          var r = (view === "map" ? (n.ring === 0 ? 12 : n.ring === 1 ? 8 : 5) : 4 + Math.min(near[n.id].length, 8)) ;
+          var hit = match && n.title.toLowerCase().indexOf(match) >= 0;
+          ctx.beginPath(); ctx.arc(n.x, n.y, r, 0, Math.PI * 2);
+          ctx.fillStyle = colour(n); ctx.fill();
+          // LUNA notes have an accent ring. The notes of Coops have none.
+          if (n.owner === "luna") { ctx.lineWidth = 2 / cam.k; ctx.strokeStyle = accent; ctx.stroke(); }
+          if (hit || n === hover || n.id === focus) {
+            ctx.lineWidth = 3 / cam.k; ctx.strokeStyle = text; ctx.stroke();
+          }
+          // In the graph, the hubs (3 links or more) always have a label.
+          var label = view === "map" ? n.ring <= 1 || hit : cam.k > 1.2 || hit || n === hover || near[n.id].length >= 3;
+          if (label) { ctx.fillStyle = text; ctx.fillText(n.title, n.x, n.y - r - 4 / cam.k); }
+        });
+        ctx.restore();
+      };
+
+      var run = function () {
+        if (frame) return;
+        var step = function () {
+          frame = null;
+          var moving = false;
+          if (view === "graph" && alpha > 0.02) { tick(); moving = true; }
+          if (view === "map") {
+            nodes.forEach(function (n) {
+              if (n.tx === null) return;
+              var dx = n.tx - n.x, dy = n.ty - n.y;
+              if (Math.abs(dx) + Math.abs(dy) > 0.5) { n.x += dx * 0.18; n.y += dy * 0.18; moving = true; }
+            });
+          }
+          fit();
+          draw();
+          if (moving || drag) frame = window.requestAnimationFrame(step);
+        };
+        frame = window.requestAnimationFrame(step);
+      };
+
+      var world = function (event) {
+        var box = canvas.getBoundingClientRect();
+        return { x: (event.clientX - box.left - hook.w / 2 - cam.x) / cam.k,
+                 y: (event.clientY - box.top - hook.h / 2 - cam.y) / cam.k };
+      };
+      var nodeAt = function (p) {
+        var best = null, bestD = (14 / cam.k) * (14 / cam.k);
+        nodes.forEach(function (n) {
+          if (!shown(n)) return;
+          var d = (n.x - p.x) * (n.x - p.x) + (n.y - p.y) * (n.y - p.y);
+          if (d < bestD) { best = n; bestD = d; }
+        });
+        return best;
+      };
+
+      canvas.addEventListener("pointerdown", function (event) {
+        canvas.setPointerCapture(event.pointerId);
+        pointers[event.pointerId] = { x: event.clientX, y: event.clientY };
+        var p = world(event);
+        drag = { node: nodeAt(p), sx: event.clientX, sy: event.clientY, cx: cam.x, cy: cam.y, moved: false };
+        run();
+      });
+      canvas.addEventListener("pointermove", function (event) {
+        var ids = Object.keys(pointers);
+        if (pointers[event.pointerId] && ids.length === 2) {
+          // Two fingers: zoom by the change in the distance between them.
+          var other = pointers[ids[0] == event.pointerId ? ids[1] : ids[0]];
+          var before = Math.hypot(pointers[event.pointerId].x - other.x, pointers[event.pointerId].y - other.y);
+          var after = Math.hypot(event.clientX - other.x, event.clientY - other.y);
+          fitted = false;
+          cam.k = Math.min(4, Math.max(0.2, cam.k * (after / (before || after))));
+          pointers[event.pointerId] = { x: event.clientX, y: event.clientY };
+          draw();
+          return;
+        }
+        if (!drag) {
+          var n = nodeAt(world(event));
+          if (n !== hover) { hover = n; label.textContent = n ? n.title + (n.tags.length ? "  (" + n.tags.join(", ") + ")" : "") : ""; draw(); }
+          return;
+        }
+        if (Math.abs(event.clientX - drag.sx) + Math.abs(event.clientY - drag.sy) > 4) drag.moved = true;
+        if (drag.node && view === "graph") {
+          var p = world(event);
+          drag.node.x = p.x; drag.node.y = p.y;
+          alpha = Math.max(alpha, 0.3);
+        } else {
+          fitted = false;
+          cam.x = drag.cx + event.clientX - drag.sx;
+          cam.y = drag.cy + event.clientY - drag.sy;
+        }
+        pointers[event.pointerId] = { x: event.clientX, y: event.clientY };
+        run();
+      });
+      var release = function (event) {
+        delete pointers[event.pointerId];
+        if (drag && !drag.moved && drag.node) {
+          focus = drag.node.id;
+          if (view === "graph") hook.pushEvent("memory-focus", { id: focus });
+          else layout();
+        }
+        drag = null;
+        run();
+      };
+      canvas.addEventListener("pointerup", release);
+      canvas.addEventListener("pointercancel", release);
+      canvas.addEventListener("wheel", function (event) {
+        event.preventDefault();
+        fitted = false;
+        cam.k = Math.min(4, Math.max(0.2, cam.k * (event.deltaY < 0 ? 1.12 : 1 / 1.12)));
+        draw();
+      }, { passive: false });
+
+      search.addEventListener("input", function () { match = search.value.trim().toLowerCase(); draw(); });
+      search.addEventListener("keydown", function (event) {
+        if (event.key !== "Enter" || !match) return;
+        var found = nodes.filter(function (n) { return n.title.toLowerCase().indexOf(match) >= 0; })[0];
+        if (found) { focus = found.id; view = "map"; hook.pushEvent("memory-focus", { id: found.id }); }
+      });
+
+      this.handleEvent("memory-graph", function (data) {
+        if (data.view) view = data.view;
+        setData(data);
+      });
+      this.handleEvent("memory-view", function (data) {
+        view = data.view;
+        if (data.focus && byId[data.focus]) focus = data.focus;
+        layout();
+      });
+
+      this.resize = function () { size(); draw(); };
+      window.addEventListener("resize", this.resize);
+      size();
+      draw();
+    },
+    destroyed: function () {
+      window.removeEventListener("resize", this.resize);
+    }
+  };
+
   var token = document.querySelector("meta[name='csrf-token']").getAttribute("content");
   var socket = new LiveView.LiveSocket("/live", Phoenix.Socket, {
     params: { _csrf_token: token },
-    hooks: { Composer: Composer, Camera: Camera, Presence: Presence, Talk: Talk }
+    hooks: { Composer: Composer, Camera: Camera, Presence: Presence, Talk: Talk, MemoryGraph: MemoryGraph }
   });
   socket.connect();
 })();
@@ -11331,6 +11705,14 @@ td { padding: 4px 8px; border-bottom: 1px solid var(--line); overflow-wrap: anyw
         user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
 .talk.listening { border-color: #3fb950; color: #3fb950; }
 .msg.voice::before { content: "\1F399  "; }
+/* The Memory panel. */
+#memory-graph { position: relative; }
+#memory-graph input { width: 100%; margin-bottom: 8px; background: var(--panel); color: var(--text);
+                      border: 1px solid var(--line); border-radius: 6px; padding: 8px; font: inherit; }
+#memory-graph canvas { display: block; width: 100%; background: var(--panel); border: 1px solid var(--line);
+                       border-radius: 8px; touch-action: none; cursor: grab; }
+.memory-bar button.active { border-color: var(--accent); color: var(--accent); }
+.memory-title { min-height: 1.5em; color: var(--muted); margin: 6px 0 0; }
 #+end_src
 
 ** Tests
@@ -11413,6 +11795,13 @@ defmodule LunaWeb.FakeCore do
 
   get "/api/money" do
     reply(conn, %{text: "Money is off. Refer to 'The gate for phase 2' in LUNA.org."})
+  end
+
+  get "/api/memory/graph" do
+    reply(conn, %{
+      nodes: [%{id: "a", title: "Polaris1", tags: ["project"], owner: "coops"}, %{id: "b", title: "Perth", tags: ["place"], owner: "luna"}],
+      links: [%{source: "a", target: "b"}]
+    })
   end
 
   get "/api/system" do
@@ -11502,6 +11891,10 @@ defmodule LunaWeb.CoreTest do
     assert text =~ "Money is off"
   end
 
+  test "the memory graph" do
+    assert {:ok, %{"nodes" => [_, _], "links" => [%{"source" => "a", "target" => "b"}]}} = Core.memory_graph()
+  end
+
   test "the system panel" do
     assert {:ok, %{"pending_approvals" => 0, "update" => _}} = Core.system()
   end
@@ -11510,7 +11903,7 @@ defmodule LunaWeb.CoreTest do
     conn = build_conn() |> put_req_header("tailscale-user-login", @owner) |> get("/")
     body = html_response(conn, 200)
 
-    for label <- ["Chat", "Approvals", "Money", "System"], do: assert(body =~ label)
+    for label <- ["Chat", "Approvals", "Money", "Memory", "System"], do: assert(body =~ label)
 
     assert body =~ ~s(phx-hook="Camera")
   end
