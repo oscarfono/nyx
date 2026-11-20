@@ -27,8 +27,11 @@ defmodule LunaCore.Main do
           wise: if(config.wise_token, do: [token: config.wise_token] ++ Map.get(config, :wise_opts, []), else: nil)}
       end
 
+    quick = %{root: config.memory_dir, today: today, money: money}
+
     agent_opts = [
-      api_key: config.anthropic_api_key, model: config.model, effort: config.effort, zone: zone, audit: audit
+      api_key: config.anthropic_api_key, model: config.model, effort: config.effort, zone: zone, audit: audit,
+      quick: &LunaCore.Quick.answer(&1, quick)
     ] ++ Map.get(config, :agent_opts, [])
 
     roam = %{root: config.memory_dir, memory: Memory, audit: audit, now: fn -> DateTime.now!(zone) end}
@@ -51,6 +54,7 @@ defmodule LunaCore.Main do
          settings: %{model: config.model, money: config.money_enabled, wise_mode: wise.mode, wise_sandbox: wise.sandbox},
          memory_root: config.memory_dir,
          roam_root: config.memory_dir,
+         glance: fn -> LunaCore.Glance.build(quick) end,
          started: DateTime.utc_now()
        ]},
       {Matrix.Bot,

@@ -1,9 +1,19 @@
 #+TITLE: Roster
 
-Pattern: 2 weeks on, 2 weeks off.
-Write one row for each swing for the next 12 months.
+LUNA reads this file in code for the roster readout, the next swing,
+and the morning brief. Keep the two tables in this form.
 
-| Start      | End        | Type | Site | Fly from | Fly to | Notes |
-|------------+------------+------+------+----------+--------+-------|
-| 2026-12-01 | 2026-12-14 | ON   |      |          |        |       |
-| 2026-12-15 | 2026-12-28 | OFF  |      |          |        |       |
+* Pattern
+One row. The first on-swing of the pattern starts on the anchor date.
+The shift changes each on-swing when Alternate is yes.
+
+| Anchor     | On days | Off days | First shift | Alternate |
+|------------+---------+----------+-------------+-----------|
+| 2026-11-25 |      14 |       14 | nights      | yes       |
+
+* Swings
+A row here wins over the pattern for its dates: a changed swing, a
+different site, the flights. Type is ON or OFF. Shift is nights or days.
+
+| Start      | End        | Type | Shift  | Site | Fly from | Fly to | Notes |
+|------------+------------+------+--------+------+----------+--------+-------|

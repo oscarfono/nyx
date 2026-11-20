@@ -14,6 +14,18 @@ defmodule LunaWeb.WebTest do
     assert audit_events() == [["web.refused", %{"reason" => "login", "path" => "/"}]]
   end
 
+  test "robots.txt refuses every crawler, with no login" do
+    conn = get(build_conn(), "/robots.txt")
+    assert conn.status == 200
+    assert conn.resp_body == "User-agent: *\nDisallow: /\n"
+  end
+
+  test "every response, a refusal too, tells crawlers not to index" do
+    for conn <- [get(build_conn(), "/"), build_conn() |> put_req_header("tailscale-user-login", @owner) |> get("/")] do
+      assert get_resp_header(conn, "x-robots-tag") == ["noindex, nofollow, noarchive, nosnippet"]
+    end
+  end
+
   test "a request with a different login gets 403" do
     conn = build_conn() |> put_req_header("tailscale-user-login", "other@example.com") |> get("/")
     assert conn.status == 403

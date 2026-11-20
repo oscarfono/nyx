@@ -54,6 +54,10 @@ defmodule LunaWeb.CoreTest do
     assert text =~ "Money is off"
   end
 
+  test "the glance" do
+    assert {:ok, %{"roster" => %{"day" => 11}, "money" => %{"off" => true}}} = Core.glance()
+  end
+
   test "the memory graph" do
     assert {:ok, %{"nodes" => [_, _], "links" => [%{"source" => "a", "target" => "b"}]}} = Core.memory_graph()
   end

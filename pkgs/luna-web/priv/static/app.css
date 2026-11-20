@@ -60,6 +60,8 @@ nav { display: flex; flex-wrap: wrap; gap: 6px; }
 @media (max-width: 900px) { .centre { order: -1; } }
 .roster-strip { display: grid; grid-template-columns: repeat(14, minmax(0, 1fr)); gap: 3px; margin-top: 12px; }
 .roster-strip span { height: 8px; background: var(--line-2); }
+.roster-strip span.done.on { background: var(--accent); }
+.roster-strip span.done.off { background: #f2b84b; }
 .globe { display: flex; gap: 14px; align-items: center; }
 .globe svg { width: 72px; height: 72px; flex: none; fill: none; stroke: var(--line-2); stroke-width: 1; }
 

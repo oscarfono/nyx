@@ -146,6 +146,18 @@ defmodule LunaCore.AgentTest do
     assert length(Agent.transcript(agent)) == 3
   end
 
+  test "a quick answer makes no API call", ctx do
+    fake = FakeClaude.start([])
+
+    {:ok, agent} =
+      Agent.start_link(api_key: "k", audit: ctx.audit, tools: ctx.tools, base_url: fake.base_url, max_retries: 0,
+                       quick: fn text -> if text =~ "swing", do: "Nights start soon.", else: nil end, name: nil)
+
+    assert Agent.ask(agent, "next swing?") == "Nights start soon."
+    assert FakeClaude.requests(fake) == []
+    assert File.read!(ctx.audit) =~ "agent.quick"
+  end
+
   test "a refusal and a reply at the length limit", ctx do
     {agent, _} = start_agent(ctx, [{200, message("refusal", [])}, {200, message("max_tokens", [text("Long")])}])
     assert Agent.ask(agent, "x") == "The model declined this request."

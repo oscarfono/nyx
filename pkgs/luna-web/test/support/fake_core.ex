@@ -46,6 +46,14 @@ defmodule LunaWeb.FakeCore do
     reply(conn, %{text: "Money is off. Refer to 'The gate for phase 2' in LUNA.org."})
   end
 
+  get "/api/glance" do
+    reply(conn, %{
+      roster: %{type: "off", shift: nil, day: 11, length: 14, days_to_next: 4,
+                swings: [%{type: "off", start: "2026-11-11"}, %{type: "on", start: "2026-11-25", shift: "nights"}]},
+      money: %{off: true}
+    })
+  end
+
   get "/api/memory/graph" do
     reply(conn, %{
       nodes: [%{id: "a", title: "Polaris1", tags: ["project"], owner: "coops"}, %{id: "b", title: "Perth", tags: ["place"], owner: "luna"}],

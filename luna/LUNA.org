@@ -433,8 +433,8 @@ Stage E4 has four parts. Coops chose the look "Observatory" from three direction
 | Part | Result                                                                                     | State |
 |------+--------------------------------------------------------------------------------------------+-------|
 | E4a  | The Observatory look: the instrument in the centre, readout panels, the transcript, the talk bar | Done |
-| E4b  | Real readouts: roster, swing, safe to spend, bills, made in code by a new core endpoint (backlog #2) | Next |
-| E4c  | The live task view: the core streams each tool call to the page                            |       |
+| E4b  | Real readouts: roster, swing, safe to spend, made in code by a new core endpoint, and the quick answers (backlog #2). Bills wait for due dates in money.org. | Done |
+| E4c  | The live task view: the core streams each tool call to the page                            | Next  |
 | E4d  | The globe panel, from God's Eye View                                                       |       |
 The contract between the page and the core is in [[*Build: the core API][Build: the core API]].
 
@@ -449,7 +449,7 @@ Each idea has its source project and its stage.
 | #  | Feature                                                                 | Source            | Stage |
 |----+-------------------------------------------------------------------------+-------------------+-------|
 | 1  | Approve with a Matrix reaction. Code still parses and checks the reply.  | OpenClaw          | core  |
-| 2  | Answer fixed phrases ("safe to spend", "next swing") in code first      | Home Assistant, OVOS | E5 |
+| 2  | Answer fixed phrases ("safe to spend", "next swing") in code first (done: =LunaCore.Quick=) | Home Assistant, OVOS | E4b |
 | 3  | A spoken morning brief for the FIFO roster                              | OpenJarvis        | E6    |
 | 4  | Voice through the Wyoming protocol (E3), with a local wake word (E6)   | Home Assistant    | E3, E6 |
 | 5  | Voice input cannot approve a tier 2 action                              | Home Assistant    | E3    |
@@ -4272,6 +4272,7 @@ The core API is JSON over HTTP on the unix socket =/run/luna-api/api.sock=.
 | =POST /api/approvals/{id}/{action}= | ={}=, action is =approve= or =deny= | ={"result"}=                   |
 | =GET /api/money=                  |                           | ={"text"}=                               |
 | =GET /api/memory/graph=           |                           | ={"nodes": [{"id", "title", "tags", "owner", "file"}], "links": [{"source", "target"}]}= |
+| =GET /api/glance=                 |                           | ={"roster": {...} or {"error"}, "money": {"weekly", "left"} or {"off"} or {"error"}}= |
 | =GET /api/system=                 |                           | ={"started", "update", "memory", "settings", "pending_approvals", "events"}= |
 
 =image= is ={"media_type", "data"}=. =data= is base64.
@@ -4714,6 +4715,245 @@ if config_env() == :test do
 end
 #+end_src
 
+** Real readouts
+
+The Console readouts and the quick answers come from code, never from the model (stage E4b).
+
+*Roster.* =roster.org= has two tables. The table Pattern holds the rule: the anchor date (the first day
+of an on-swing), the on days, the off days, the first shift, and whether the shift alternates.
+Coops works 14 on, 14 off, nights then days, from the anchor 2026-11-25.
+A row in the table Swings wins over the pattern for its dates, for example a changed swing.
+=LunaCore.Roster= gives the swing of any date, the day in it, and the next swing.
+
+*Money.* =LunaCore.Money.safe/1= gives the safe spend per week and what is left this week.
+
+*Quick answers (backlog #2).* =LunaCore.Quick= answers "next swing?" and "safe to spend?" in code,
+before the agent calls the model. The answer is instant, and it works when the Claude API does not.
+A long message never gets a quick answer: it goes to the model.
+
+*Bills.* The bills readout needs a due date for each annual cost in =money.org=. It waits for those dates.
+
+#+begin_src elixir :tangle ../pkgs/luna-core-ex/lib/luna_core/roster.ex
+defmodule LunaCore.Roster do
+  @moduledoc """
+  Reads roster.org and gives the swing for any date, in code.
+
+  The table Pattern holds the rule: an anchor date (the first day of an
+  on-swing), the on days, the off days, the first shift, and whether the
+  shift alternates. A row in the table Swings wins over the pattern for its dates.
+  Refer to "Real readouts" in LUNA.org.
+  """
+
+  alias LunaCore.Money.OrgTable
+
+  defmodule Swing do
+    @moduledoc false
+    defstruct [:type, :start, :end, :shift, :site]
+  end
+
+  @doc "Parses the text of roster.org. Returns {:ok, roster} or {:error, message}."
+  def parse(text) do
+    tables = OrgTable.tables_by_heading(text)
+
+    with [row | _] <- OrgTable.records(Map.get(tables, "Pattern", [])),
+         {:ok, anchor} <- Date.from_iso8601(row["Anchor"] || ""),
+         {on, ""} when on > 0 <- Integer.parse(row["On days"] || ""),
+         {off, ""} when off > 0 <- Integer.parse(row["Off days"] || "") do
+      {:ok,
+       %{
+         anchor: anchor,
+         on: on,
+         off: off,
+         first: shift(row["First shift"]) || "days",
+         alternate: String.downcase(row["Alternate"] || "") in ["yes", "y", "true"],
+         swings: overrides(Map.get(tables, "Swings", []))
+       }}
+    else
+      _ -> {:error, "roster.org has no valid Pattern table. Write the anchor date, the on days and the off days."}
+    end
+  end
+
+  defp shift(nil), do: nil
+
+  defp shift(text) do
+    case String.downcase(String.trim(text)) do
+      "nights" <> _ -> "nights"
+      "night" <> _ -> "nights"
+      "days" <> _ -> "days"
+      "day" <> _ -> "days"
+      _ -> nil
+    end
+  end
+
+  defp overrides(rows) do
+    for r <- OrgTable.records(rows),
+        {:ok, s} <- [Date.from_iso8601(r["Start"] || "")],
+        {:ok, e} <- [Date.from_iso8601(r["End"] || "")],
+        type <- [String.upcase(r["Type"] || "")],
+        type in ["ON", "OFF"] do
+      site = r["Site"] || ""
+      %Swing{type: if(type == "ON", do: :on, else: :off), start: s, end: e,
+             shift: if(type == "ON", do: shift(r["Shift"])), site: if(site == "", do: nil, else: site)}
+    end
+  end
+
+  @doc "The swing that holds the date."
+  def swing_at(roster, date) do
+    Enum.find(roster.swings, fn s -> Date.compare(date, s.start) != :lt and Date.compare(date, s.end) != :gt end) ||
+      pattern_swing(roster, date)
+  end
+
+  defp pattern_swing(r, date) do
+    cycle = r.on + r.off
+    days = Date.diff(date, r.anchor)
+    index = Integer.floor_div(days, cycle)
+    cycle_start = Date.add(r.anchor, index * cycle)
+
+    if days - index * cycle < r.on do
+      shift = if r.alternate and rem(abs(index), 2) == 1, do: other(r.first), else: r.first
+      %Swing{type: :on, start: cycle_start, end: Date.add(cycle_start, r.on - 1), shift: shift}
+    else
+      start = Date.add(cycle_start, r.on)
+      %Swing{type: :off, start: start, end: Date.add(start, r.off - 1)}
+    end
+  end
+
+  defp other("nights"), do: "days"
+  defp other(_), do: "nights"
+
+  @doc "The swing of the date, the day in it, and the next swing."
+  def status(roster, date) do
+    now = swing_at(roster, date)
+    %{swing: now, day: Date.diff(date, now.start) + 1, length: Date.diff(now.end, now.start) + 1,
+      next: swing_at(roster, Date.add(now.end, 1)), days_to_next: Date.diff(now.end, date) + 1}
+  end
+
+  @doc "The swing of the date and the next n - 1 swings."
+  def upcoming(roster, date, n) do
+    Enum.reduce(1..n, {[], date}, fn _, {acc, d} -> s = swing_at(roster, d); {acc ++ [s], Date.add(s.end, 1)} end)
+    |> elem(0)
+  end
+
+  @doc "One sentence for the owner, by voice or in Matrix."
+  def sentence(roster, date) do
+    st = status(roster, date)
+    next = st.next
+
+    current =
+      case st.swing.type do
+        :off -> "You're on day #{st.day} of #{st.length} of your break."
+        :on -> "You're on day #{st.day} of #{st.length} on site, #{st.swing.shift}."
+      end
+
+    coming =
+      case next.type do
+        :on -> "#{String.capitalize(next.shift || "work")} start #{when_text(next.start, st.days_to_next)}."
+        :off -> "Your break starts #{when_text(next.start, st.days_to_next)}."
+      end
+
+    current <> " " <> coming
+  end
+
+  defp when_text(date, 1), do: "tomorrow, #{Calendar.strftime(date, "%A %-d %B")}"
+  defp when_text(date, days), do: "#{Calendar.strftime(date, "%A %-d %B")}, in #{days} days"
+
+  @doc "The roster for the page, as plain data."
+  def glance(roster, date) do
+    st = status(roster, date)
+
+    %{
+      type: Atom.to_string(st.swing.type), shift: st.swing.shift, day: st.day, length: st.length,
+      days_to_next: st.days_to_next, sentence: sentence(roster, date),
+      swings: for(s <- upcoming(roster, date, 4),
+                  do: %{type: Atom.to_string(s.type), start: Date.to_iso8601(s.start), end: Date.to_iso8601(s.end), shift: s.shift, site: s.site})
+    }
+  end
+end
+#+end_src
+
+#+begin_src elixir :tangle ../pkgs/luna-core-ex/lib/luna_core/quick.ex
+defmodule LunaCore.Quick do
+  @moduledoc """
+  Answers fixed questions in code, with no model call (backlog #2):
+  the roster ("next swing?") and money ("safe to spend?"). The answer is
+  instant, and it works when the Claude API does not.
+
+  The context is a map: :root (the memory), :today (a function), :money
+  (nil, or the config of LunaCore.Money).
+  """
+
+  alias LunaCore.Roster
+
+  @roster ~r/\b(next swing|my swing|roster|when do i (go back|fly|start|finish)|back to (work|site)|how long (till|until|before) (work|my break|the break|site)|days off left)\b/i
+  @money ~r/\b(safe to spend|spending money|how much can i spend)\b/i
+
+  @doc "The answer, or nil when the question is not a fixed question."
+  def answer(text, ctx) do
+    clean = text |> String.replace_prefix("[voice] ", "") |> String.trim()
+
+    cond do
+      String.length(clean) > 120 -> nil
+      Regex.match?(@roster, clean) -> roster(ctx)
+      Regex.match?(@money, clean) -> money(ctx)
+      true -> nil
+    end
+  end
+
+  defp roster(ctx) do
+    with {:ok, text} <- File.read(Path.join(ctx.root, "roster.org")),
+         {:ok, roster} <- Roster.parse(text) do
+      Roster.sentence(roster, ctx.today.())
+    else
+      {:error, message} when is_binary(message) -> message
+      {:error, _} -> "roster.org is not in the memory yet."
+    end
+  end
+
+  defp money(%{money: nil}), do: "Money is off, so I have no safe-to-spend number yet."
+
+  defp money(%{money: cfg}) do
+    case LunaCore.Money.safe(cfg) do
+      {:ok, %{weekly: weekly, left: left}} ->
+        "AUD #{LunaCore.Money.Report.format(left)} left of AUD #{LunaCore.Money.Report.format(weekly)} this week."
+
+      {:error, message} ->
+        message
+    end
+  end
+end
+#+end_src
+
+#+begin_src elixir :tangle ../pkgs/luna-core-ex/lib/luna_core/glance.ex
+defmodule LunaCore.Glance do
+  @moduledoc "The readouts of the Console, made in code: the roster and money. ctx is the context of LunaCore.Quick."
+
+  alias LunaCore.{Money, Roster}
+
+  def build(ctx) do
+    %{roster: roster(ctx), money: money(ctx)}
+  end
+
+  defp roster(ctx) do
+    with {:ok, text} <- File.read(Path.join(ctx.root, "roster.org")),
+         {:ok, roster} <- Roster.parse(text) do
+      Roster.glance(roster, ctx.today.())
+    else
+      {:error, message} when is_binary(message) -> %{error: message}
+      {:error, _} -> %{error: "roster.org is not in the memory yet."}
+    end
+  end
+
+  defp money(%{money: nil}), do: %{off: true}
+
+  defp money(%{money: cfg}) do
+    case Money.safe(cfg) do
+      {:ok, %{weekly: w, left: l}} -> %{weekly: Money.Report.format(w), left: Money.Report.format(l)}
+      {:error, message} -> %{error: message}
+    end
+  end
+end
+#+end_src
+
 ** Cutover
 
 The site value =core= selects the core that runs as =luna-core=. The unit is the same for the two cores:
@@ -4826,8 +5066,11 @@ defmodule LunaCore.Main do
           wise: if(config.wise_token, do: [token: config.wise_token] ++ Map.get(config, :wise_opts, []), else: nil)}
       end
 
+    quick = %{root: config.memory_dir, today: today, money: money}
+
     agent_opts = [
-      api_key: config.anthropic_api_key, model: config.model, effort: config.effort, zone: zone, audit: audit
+      api_key: config.anthropic_api_key, model: config.model, effort: config.effort, zone: zone, audit: audit,
+      quick: &LunaCore.Quick.answer(&1, quick)
     ] ++ Map.get(config, :agent_opts, [])
 
     roam = %{root: config.memory_dir, memory: Memory, audit: audit, now: fn -> DateTime.now!(zone) end}
@@ -4850,6 +5093,7 @@ defmodule LunaCore.Main do
          settings: %{model: config.model, money: config.money_enabled, wise_mode: wise.mode, wise_sandbox: wise.sandbox},
          memory_root: config.memory_dir,
          roam_root: config.memory_dir,
+         glance: fn -> LunaCore.Glance.build(quick) end,
          started: DateTime.utc_now()
        ]},
       {Matrix.Bot,
@@ -5479,6 +5723,14 @@ defmodule LunaCore.Api do
     end
   end
 
+  # The readouts of the Console: the roster and money, made in code.
+  get "/api/glance" do
+    case conn.assigns.core[:glance] do
+      nil -> reply(conn, 200, %{roster: nil, money: nil})
+      fun -> reply(conn, 200, fun.())
+    end
+  end
+
   get "/api/money" do
     case conn.assigns.core[:money] do
       nil -> reply(conn, 200, %{text: "Money is off. Refer to 'The gate for phase 2' in LUNA.org."})
@@ -5812,6 +6064,7 @@ defmodule LunaCore.Agent do
 
   @doc """
   Options: :api_key, :model, :effort, :zone, :audit, :tools (client tools),
+  :quick (a function: text -> nil or a reply made in code),
   :server_tools (default: web search and web fetch), :base_url, :max_retries, :name.
   """
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts, name: Keyword.get(opts, :name, __MODULE__))
@@ -5846,8 +6099,16 @@ defmodule LunaCore.Agent do
 
   @impl true
   def handle_call({:ask, text, images}, _from, state) do
-    {reply, state} = do_ask(state, text, images)
-    {:reply, reply, state}
+    # A fixed question gets its answer in code, with no model call (backlog #2).
+    case images == [] && quick(state, text) do
+      reply when is_binary(reply) ->
+        Audit.write(audit(state), "agent.quick", %{chars: String.length(text)})
+        {:reply, reply, state}
+
+      _ ->
+        {reply, state} = do_ask(state, text, images)
+        {:reply, reply, state}
+    end
   end
 
   def handle_call({:transcript, limit}, _from, state), do: {:reply, transcript_of(state.history, limit), state}
@@ -5860,6 +6121,13 @@ defmodule LunaCore.Agent do
   end
 
   defp audit(state), do: Keyword.fetch!(state.opts, :audit)
+
+  defp quick(state, text) do
+    case Keyword.get(state.opts, :quick) do
+      nil -> nil
+      fun -> fun.(text)
+    end
+  end
 
   defp do_ask(state, text, images) do
     now = now(Keyword.get(state.opts, :zone, "Etc/UTC"))
@@ -7184,6 +7452,22 @@ defmodule LunaCore.Money do
     end
   end
 
+  @doc "The safe spend per week and what is left this week, for the page and the quick answers."
+  def safe(cfg) do
+    with nil <- main_problem(cfg),
+         plan = Plan.load(Path.join(cfg.root, "money.org")),
+         weekly when weekly != nil <- Plan.spend_per_week(plan),
+         {begin_date, end_date} = Report.week_window(cfg.today.()),
+         {:ok, spent_by} <- Report.balances(main(cfg), ["^expenses"], begin_date, end_date) do
+      spent = Report.total(spent_by)["AUD"] || Decimal.new(0)
+      {:ok, %{weekly: weekly, left: Decimal.sub(weekly, spent)}}
+    else
+      nil -> {:error, "The safe-to-spend number needs the income in money.org."}
+      problem when is_binary(problem) -> {:error, "No number: " <> problem}
+      {:error, message} -> {:error, "hledger failed: " <> message}
+    end
+  end
+
   @doc "The transactions with no category. The descriptions are masked."
   def unknown(cfg, limit \\ 20) do
     today = cfg.today.()
@@ -7891,6 +8175,11 @@ defmodule LunaCore.ApiTest do
     refute Jason.encode!(graph) =~ "Secret"
   end
 
+  test "the glance gives the readouts", %{core: core} do
+    core = Keyword.put(core, :glance, fn -> %{roster: %{day: 11}, money: %{off: true}} end)
+    assert {200, %{"roster" => %{"day" => 11}, "money" => %{"off" => true}}} = call(core, :get, "/api/glance")
+  end
+
   test "money is off by default", %{core: core} do
     {200, body} = call(core, :get, "/api/money")
     assert body["text"] =~ "Money is off"
@@ -8063,6 +8352,18 @@ defmodule LunaCore.AgentTest do
     Agent.ask(agent, "one")
     assert Agent.ask(agent, "two") =~ "no credit"
     assert length(Agent.transcript(agent)) == 3
+  end
+
+  test "a quick answer makes no API call", ctx do
+    fake = FakeClaude.start([])
+
+    {:ok, agent} =
+      Agent.start_link(api_key: "k", audit: ctx.audit, tools: ctx.tools, base_url: fake.base_url, max_retries: 0,
+                       quick: fn text -> if text =~ "swing", do: "Nights start soon.", else: nil end, name: nil)
+
+    assert Agent.ask(agent, "next swing?") == "Nights start soon."
+    assert FakeClaude.requests(fake) == []
+    assert File.read!(ctx.audit) =~ "agent.quick"
   end
 
   test "a refusal and a reply at the length limit", ctx do
@@ -8845,6 +9146,82 @@ defmodule LunaCore.MainTest do
     Supervisor.stop(sup)
     audit = File.read!(config.audit_file)
     assert audit =~ "matrix.ready" and audit =~ ~s("core":"elixir")
+  end
+end
+#+end_src
+
+#+begin_src elixir :tangle ../pkgs/luna-core-ex/test/roster_test.exs
+defmodule LunaCore.RosterTest do
+  use ExUnit.Case, async: true
+
+  alias LunaCore.{Quick, Roster}
+
+  @moduletag :tmp_dir
+
+  @roster """
+  #+TITLE: Roster
+  * Pattern
+  | Anchor     | On days | Off days | First shift | Alternate |
+  |------------+---------+----------+-------------+-----------|
+  | 2026-11-25 |      14 |       14 | nights      | yes       |
+  * Swings
+  | Start      | End        | Type | Shift  | Site | Fly from | Fly to | Notes |
+  |------------+------------+------+--------+------+----------+--------+-------|
+  """
+
+  defp roster(extra \\ ""), do: elem(Roster.parse(@roster <> extra), 1)
+
+  # The calendar of Coops on 2026-11-21: off now, nights from 25 Nov, then days.
+  test "the calendar of Coops" do
+    r = roster()
+    assert %{type: :off, start: ~D[2026-11-11], end: ~D[2026-11-24]} = Roster.swing_at(r, ~D[2026-11-21])
+    assert %{type: :on, shift: "nights", start: ~D[2026-11-25], end: ~D[2026-12-08]} = Roster.swing_at(r, ~D[2026-11-25])
+    assert %{type: :off, start: ~D[2026-12-09], end: ~D[2026-12-22]} = Roster.swing_at(r, ~D[2026-12-15])
+    assert %{type: :on, shift: "days", start: ~D[2026-12-23], end: ~D[2027-01-05]} = Roster.swing_at(r, ~D[2026-12-23])
+    assert %{type: :on, shift: "nights", start: ~D[2027-01-20]} = Roster.swing_at(r, ~D[2027-01-25])
+  end
+
+  test "before the anchor, the pattern goes back too" do
+    assert %{type: :off, start: ~D[2026-11-11], end: ~D[2026-11-24]} = Roster.swing_at(roster(), ~D[2026-11-21])
+    assert %{type: :on, shift: "days", start: ~D[2026-10-28]} = Roster.swing_at(roster(), ~D[2026-11-01])
+  end
+
+  test "the status: the day in the swing and the next swing" do
+    st = Roster.status(roster(), ~D[2026-11-21])
+    assert st.day == 11 and st.length == 14 and st.days_to_next == 4
+    assert st.next.type == :on and st.next.shift == "nights"
+  end
+
+  test "the sentence for the owner" do
+    assert Roster.sentence(roster(), ~D[2026-11-21]) ==
+             "You're on day 11 of 14 of your break. Nights start Wednesday 25 November, in 4 days."
+    assert Roster.sentence(roster(), ~D[2026-11-24]) =~ "Nights start tomorrow, Wednesday 25 November."
+    assert Roster.sentence(roster(), ~D[2026-11-30]) =~ "You're on day 6 of 14 on site, nights. Your break starts Wednesday 9 December, in 9 days."
+  end
+
+  test "a row in Swings wins over the pattern" do
+    r = roster("| 2026-12-23 | 2027-01-02 | ON   | days   | Polaris1 |          |        | short swing |\n")
+    assert %{type: :on, end: ~D[2027-01-02], site: "Polaris1"} = Roster.swing_at(r, ~D[2026-12-30])
+  end
+
+  test "four swings for the page" do
+    g = Roster.glance(roster(), ~D[2026-11-21])
+    assert Enum.map(g.swings, &{&1.type, &1.start, &1.shift}) ==
+             [{"off", "2026-11-11", nil}, {"on", "2026-11-25", "nights"}, {"off", "2026-12-09", nil}, {"on", "2026-12-23", "days"}]
+  end
+
+  test "no Pattern table is an error" do
+    assert {:error, _} = Roster.parse("* Roster\nnothing")
+  end
+
+  test "the quick answers", %{tmp_dir: tmp} do
+    File.write!(Path.join(tmp, "roster.org"), @roster)
+    ctx = %{root: tmp, today: fn -> ~D[2026-11-21] end, money: nil}
+    assert Quick.answer("[voice] When's my next swing?", ctx) =~ "Nights start Wednesday 25 November"
+    assert Quick.answer("how long till work", ctx) =~ "day 11 of 14"
+    assert Quick.answer("What's safe to spend?", ctx) =~ "Money is off"
+    assert Quick.answer("Write me a poem about the roster of my dreams and also the history of rosters in mining camps since 1900, please, long form", ctx) == nil
+    assert Quick.answer("hello", ctx) == nil
   end
 end
 #+end_src
@@ -9658,6 +10035,11 @@ The login is the same as the login of the first Python page.
 The plug =LunaWeb.Owner= accepts a request only when the header =Tailscale-User-Login= is the owner login.
 The plug comes before the static files, so each file needs the login.
 
+*No crawlers.* The firewall of luna accepts no TCP connection from the internet: only the
+Tailscale tunnel (UDP 41641) and ping. =tailscale serve= is tailnet only, never funnel. As a second
+layer, the page serves =/robots.txt= (=Disallow: /=, with no login) and sends
+=X-Robots-Tag: noindex, nofollow, noarchive, nosnippet= on every response, a 403 too.
+
 *CAUTION:* Keep =phoenix_live_view= at 1.2.14 or later.
 Earlier versions let a join without ="url"= skip the =on_mount= hooks (EEF-CVE-2026-126334).
 =HomeLive.mount/3= checks the owner too, so the check does not depend on the hook only.
@@ -10002,6 +10384,9 @@ defmodule LunaWeb.Core do
   end
 
   def system, do: request(:get, "/api/system")
+
+  @doc "The readouts of the Console, made in code by the core: the roster and money."
+  def glance, do: request(:get, "/api/glance")
 
   @doc "The long-term memory graph: titles, tags and links. No note text."
   def memory_graph, do: request(:get, "/api/memory/graph")
@@ -10521,6 +10906,10 @@ defmodule LunaWeb.Endpoint do
 
   plug Plug.RequestId
   plug Plug.Head
+  # No crawler indexes LUNA. The firewall and the tailnet keep crawlers out;
+  # these two are a second layer. robots.txt reveals nothing, so it needs no login.
+  plug :no_index
+  plug :robots
   plug Plug.Session, @session_options
   # The owner check comes before the static files, as in the Python app.
   plug LunaWeb.Owner
@@ -10532,6 +10921,21 @@ defmodule LunaWeb.Endpoint do
   plug Plug.Static, at: "/vendor", from: {:phoenix_live_view, "priv/static"}, only: ~w(phoenix_live_view.min.js), cache_control_for_etags: "no-cache"
 
   plug LunaWeb.Router
+
+  defp no_index(conn, _opts) do
+    Plug.Conn.register_before_send(conn, fn conn ->
+      Plug.Conn.put_resp_header(conn, "x-robots-tag", "noindex, nofollow, noarchive, nosnippet")
+    end)
+  end
+
+  defp robots(%{request_path: "/robots.txt"} = conn, _opts) do
+    conn
+    |> Plug.Conn.put_resp_content_type("text/plain")
+    |> Plug.Conn.send_resp(200, "User-agent: *\nDisallow: /\n")
+    |> Plug.Conn.halt()
+  end
+
+  defp robots(conn, _opts), do: conn
 end
 #+end_src
 
@@ -10649,6 +11053,7 @@ defmodule LunaWeb.HomeLive do
         presence: "idle",
         presence_style: "orb",
         memory_view: "graph",
+        glance: nil,
         memory_count: 0,
         voice: [],
         voice_bytes: 0,
@@ -10658,7 +11063,7 @@ defmodule LunaWeb.HomeLive do
     if connected?(socket) do
       LunaWeb.Audit.write("web.connect")
       :timer.send_interval(@refresh, :refresh)
-      {:ok, socket |> load_history() |> load_approvals() |> load(:system, Core.system()) |> load_memory_count()}
+      {:ok, socket |> load_history() |> load_approvals() |> load(:system, Core.system()) |> load_memory_count() |> load_glance()}
     else
       {:ok, socket}
     end
@@ -10841,7 +11246,7 @@ defmodule LunaWeb.HomeLive do
   end
 
   @impl true
-  def handle_info(:refresh, socket), do: {:noreply, load_approvals(socket)}
+  def handle_info(:refresh, socket), do: {:noreply, socket |> load_approvals() |> load_glance()}
 
   def handle_info({:voice_audio, turn, audio}, %{assigns: %{turn: turn}} = socket) do
     event = %{turn: turn, rate: audio.rate, data: Base.encode64(audio.pcm)}
@@ -10908,6 +11313,13 @@ defmodule LunaWeb.HomeLive do
 
       {:error, text} ->
         assign(socket, notice: text)
+    end
+  end
+
+  defp load_glance(socket) do
+    case Core.glance() do
+      {:ok, glance} -> assign(socket, glance: glance)
+      {:error, _} -> socket
     end
   end
 
@@ -10985,18 +11397,38 @@ defmodule LunaWeb.HomeLive do
         <div class="column readouts" aria-label="Readouts">
           <div class="panel">
             <p class="label">Safe to spend · this week</p>
-            <p class="figure">{if @system && get_in(@system, ["settings", "money"]), do: "See Money", else: "Money is off"}</p>
-            <p class="hint">LUNA works this out in code from money.org.</p>
+            <%= case @glance && @glance["money"] do %>
+              <% %{"left" => left, "weekly" => weekly} -> %>
+                <p class="figure">AUD {left}</p>
+                <p class="hint">left of AUD {weekly} this week</p>
+              <% %{"error" => error} -> %>
+                <p class="figure small">No number yet</p>
+                <p class="hint">{error}</p>
+              <% _ -> %>
+                <p class="figure">Money is off</p>
+                <p class="hint">LUNA works this out in code from money.org.</p>
+            <% end %>
           </div>
           <div class="panel">
             <p class="label">Roster</p>
-            <p class="figure small">Not read yet</p>
-            <div class="roster-strip" aria-hidden="true"><span :for={_ <- 1..14}></span></div>
-            <p class="hint">LUNA reads roster.org for this. It comes next.</p>
+            <%= case @glance && @glance["roster"] do %>
+              <% %{"type" => type, "day" => day, "length" => length} = roster -> %>
+                <p class="figure small">Day {day} of {length} · {roster_title(type, roster["shift"])}</p>
+                <div class="roster-strip" aria-hidden="true">
+                  <span :for={n <- 1..length} class={if n <= day, do: "done " <> type, else: type}></span>
+                </div>
+                <p class="hint">{next_swing(roster)}</p>
+              <% %{"error" => error} -> %>
+                <p class="figure small">Not read</p>
+                <p class="hint">{error}</p>
+              <% _ -> %>
+                <p class="figure small">Not read yet</p>
+                <div class="roster-strip" aria-hidden="true"><span :for={_ <- 1..14}></span></div>
+            <% end %>
           </div>
           <div class="panel">
             <p class="label">Due · 14 days</p>
-            <p class="hint">From the annual costs in money.org. It comes next.</p>
+            <p class="hint">This needs a due date for each cost in money.org. Ask LUNA to add the dates.</p>
           </div>
         </div>
 
@@ -11137,6 +11569,20 @@ defmodule LunaWeb.HomeLive do
     model = get_in(system, ["settings", "model"]) || "model"
     "Cloud · #{model} · shared memory · #{count} notes"
   end
+
+  defp roster_title("off", _), do: "break"
+  defp roster_title("on", nil), do: "on site"
+  defp roster_title("on", shift), do: "on site, " <> shift
+  defp roster_title(_, _), do: ""
+
+  # The next swing, from the list of swings: the second one is the next.
+  defp next_swing(%{"swings" => [_, next | _], "days_to_next" => days}) do
+    what = if next["type"] == "on", do: String.capitalize(next["shift"] || "work") <> " start", else: "Break starts"
+    when_ = if days == 1, do: "tomorrow", else: "in #{days} days"
+    "#{what} #{when_} · #{next["start"]}"
+  end
+
+  defp next_swing(_), do: ""
 
   defp state_label("listening"), do: "Listening"
   defp state_label("thinking"), do: "Thinking"
@@ -11826,6 +12272,8 @@ nav { display: flex; flex-wrap: wrap; gap: 6px; }
 @media (max-width: 900px) { .centre { order: -1; } }
 .roster-strip { display: grid; grid-template-columns: repeat(14, minmax(0, 1fr)); gap: 3px; margin-top: 12px; }
 .roster-strip span { height: 8px; background: var(--line-2); }
+.roster-strip span.done.on { background: var(--accent); }
+.roster-strip span.done.off { background: #f2b84b; }
 .globe { display: flex; gap: 14px; align-items: center; }
 .globe svg { width: 72px; height: 72px; flex: none; fill: none; stroke: var(--line-2); stroke-width: 1; }
 
@@ -11967,6 +12415,14 @@ defmodule LunaWeb.FakeCore do
     reply(conn, %{text: "Money is off. Refer to 'The gate for phase 2' in LUNA.org."})
   end
 
+  get "/api/glance" do
+    reply(conn, %{
+      roster: %{type: "off", shift: nil, day: 11, length: 14, days_to_next: 4,
+                swings: [%{type: "off", start: "2026-11-11"}, %{type: "on", start: "2026-11-25", shift: "nights"}]},
+      money: %{off: true}
+    })
+  end
+
   get "/api/memory/graph" do
     reply(conn, %{
       nodes: [%{id: "a", title: "Polaris1", tags: ["project"], owner: "coops"}, %{id: "b", title: "Perth", tags: ["place"], owner: "luna"}],
@@ -12059,6 +12515,10 @@ defmodule LunaWeb.CoreTest do
   test "money is off by default" do
     assert {:ok, text} = Core.money()
     assert text =~ "Money is off"
+  end
+
+  test "the glance" do
+    assert {:ok, %{"roster" => %{"day" => 11}, "money" => %{"off" => true}}} = Core.glance()
   end
 
   test "the memory graph" do
@@ -12266,6 +12726,18 @@ defmodule LunaWeb.WebTest do
     conn = get(build_conn(), "/")
     assert conn.status == 403
     assert audit_events() == [["web.refused", %{"reason" => "login", "path" => "/"}]]
+  end
+
+  test "robots.txt refuses every crawler, with no login" do
+    conn = get(build_conn(), "/robots.txt")
+    assert conn.status == 200
+    assert conn.resp_body == "User-agent: *\nDisallow: /\n"
+  end
+
+  test "every response, a refusal too, tells crawlers not to index" do
+    for conn <- [get(build_conn(), "/"), build_conn() |> put_req_header("tailscale-user-login", @owner) |> get("/")] do
+      assert get_resp_header(conn, "x-robots-tag") == ["noindex, nofollow, noarchive, nosnippet"]
+    end
   end
 
   test "a request with a different login gets 403" do
@@ -12542,13 +13014,23 @@ Git records each change.
 #+begin_src org :tangle memory-seed/roster.org
 ,#+TITLE: Roster
 
-Pattern: 2 weeks on, 2 weeks off.
-Write one row for each swing for the next 12 months.
+LUNA reads this file in code for the roster readout, the next swing,
+and the morning brief. Keep the two tables in this form.
 
-| Start      | End        | Type | Site | Fly from | Fly to | Notes |
-|------------+------------+------+------+----------+--------+-------|
-| 2026-12-01 | 2026-12-14 | ON   |      |          |        |       |
-| 2026-12-15 | 2026-12-28 | OFF  |      |          |        |       |
+,* Pattern
+One row. The first on-swing of the pattern starts on the anchor date.
+The shift changes each on-swing when Alternate is yes.
+
+| Anchor     | On days | Off days | First shift | Alternate |
+|------------+---------+----------+-------------+-----------|
+| 2026-11-25 |      14 |       14 | nights      | yes       |
+
+,* Swings
+A row here wins over the pattern for its dates: a changed swing, a
+different site, the flights. Type is ON or OFF. Shift is nights or days.
+
+| Start      | End        | Type | Shift  | Site | Fly from | Fly to | Notes |
+|------------+------------+------+--------+------+----------+--------+-------|
 #+end_src
 
 #+begin_src org :tangle memory-seed/money.org

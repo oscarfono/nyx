@@ -33,6 +33,7 @@ defmodule LunaWeb.HomeLive do
         presence: "idle",
         presence_style: "orb",
         memory_view: "graph",
+        glance: nil,
         memory_count: 0,
         voice: [],
         voice_bytes: 0,
@@ -42,7 +43,7 @@ defmodule LunaWeb.HomeLive do
     if connected?(socket) do
       LunaWeb.Audit.write("web.connect")
       :timer.send_interval(@refresh, :refresh)
-      {:ok, socket |> load_history() |> load_approvals() |> load(:system, Core.system()) |> load_memory_count()}
+      {:ok, socket |> load_history() |> load_approvals() |> load(:system, Core.system()) |> load_memory_count() |> load_glance()}
     else
       {:ok, socket}
     end
@@ -225,7 +226,7 @@ defmodule LunaWeb.HomeLive do
   end
 
   @impl true
-  def handle_info(:refresh, socket), do: {:noreply, load_approvals(socket)}
+  def handle_info(:refresh, socket), do: {:noreply, socket |> load_approvals() |> load_glance()}
 
   def handle_info({:voice_audio, turn, audio}, %{assigns: %{turn: turn}} = socket) do
     event = %{turn: turn, rate: audio.rate, data: Base.encode64(audio.pcm)}
@@ -292,6 +293,13 @@ defmodule LunaWeb.HomeLive do
 
       {:error, text} ->
         assign(socket, notice: text)
+    end
+  end
+
+  defp load_glance(socket) do
+    case Core.glance() do
+      {:ok, glance} -> assign(socket, glance: glance)
+      {:error, _} -> socket
     end
   end
 
@@ -369,18 +377,38 @@ defmodule LunaWeb.HomeLive do
         <div class="column readouts" aria-label="Readouts">
           <div class="panel">
             <p class="label">Safe to spend · this week</p>
-            <p class="figure">{if @system && get_in(@system, ["settings", "money"]), do: "See Money", else: "Money is off"}</p>
-            <p class="hint">LUNA works this out in code from money.org.</p>
+            <%= case @glance && @glance["money"] do %>
+              <% %{"left" => left, "weekly" => weekly} -> %>
+                <p class="figure">AUD {left}</p>
+                <p class="hint">left of AUD {weekly} this week</p>
+              <% %{"error" => error} -> %>
+                <p class="figure small">No number yet</p>
+                <p class="hint">{error}</p>
+              <% _ -> %>
+                <p class="figure">Money is off</p>
+                <p class="hint">LUNA works this out in code from money.org.</p>
+            <% end %>
           </div>
           <div class="panel">
             <p class="label">Roster</p>
-            <p class="figure small">Not read yet</p>
-            <div class="roster-strip" aria-hidden="true"><span :for={_ <- 1..14}></span></div>
-            <p class="hint">LUNA reads roster.org for this. It comes next.</p>
+            <%= case @glance && @glance["roster"] do %>
+              <% %{"type" => type, "day" => day, "length" => length} = roster -> %>
+                <p class="figure small">Day {day} of {length} · {roster_title(type, roster["shift"])}</p>
+                <div class="roster-strip" aria-hidden="true">
+                  <span :for={n <- 1..length} class={if n <= day, do: "done " <> type, else: type}></span>
+                </div>
+                <p class="hint">{next_swing(roster)}</p>
+              <% %{"error" => error} -> %>
+                <p class="figure small">Not read</p>
+                <p class="hint">{error}</p>
+              <% _ -> %>
+                <p class="figure small">Not read yet</p>
+                <div class="roster-strip" aria-hidden="true"><span :for={_ <- 1..14}></span></div>
+            <% end %>
           </div>
           <div class="panel">
             <p class="label">Due · 14 days</p>
-            <p class="hint">From the annual costs in money.org. It comes next.</p>
+            <p class="hint">This needs a due date for each cost in money.org. Ask LUNA to add the dates.</p>
           </div>
         </div>
 
@@ -521,6 +549,20 @@ defmodule LunaWeb.HomeLive do
     model = get_in(system, ["settings", "model"]) || "model"
     "Cloud · #{model} · shared memory · #{count} notes"
   end
+
+  defp roster_title("off", _), do: "break"
+  defp roster_title("on", nil), do: "on site"
+  defp roster_title("on", shift), do: "on site, " <> shift
+  defp roster_title(_, _), do: ""
+
+  # The next swing, from the list of swings: the second one is the next.
+  defp next_swing(%{"swings" => [_, next | _], "days_to_next" => days}) do
+    what = if next["type"] == "on", do: String.capitalize(next["shift"] || "work") <> " start", else: "Break starts"
+    when_ = if days == 1, do: "tomorrow", else: "in #{days} days"
+    "#{what} #{when_} · #{next["start"]}"
+  end
+
+  defp next_swing(_), do: ""
 
   defp state_label("listening"), do: "Listening"
   defp state_label("thinking"), do: "Thinking"

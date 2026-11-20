@@ -69,6 +69,7 @@ defmodule LunaCore.Agent do
 
   @doc """
   Options: :api_key, :model, :effort, :zone, :audit, :tools (client tools),
+  :quick (a function: text -> nil or a reply made in code),
   :server_tools (default: web search and web fetch), :base_url, :max_retries, :name.
   """
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts, name: Keyword.get(opts, :name, __MODULE__))
@@ -103,8 +104,16 @@ defmodule LunaCore.Agent do
 
   @impl true
   def handle_call({:ask, text, images}, _from, state) do
-    {reply, state} = do_ask(state, text, images)
-    {:reply, reply, state}
+    # A fixed question gets its answer in code, with no model call (backlog #2).
+    case images == [] && quick(state, text) do
+      reply when is_binary(reply) ->
+        Audit.write(audit(state), "agent.quick", %{chars: String.length(text)})
+        {:reply, reply, state}
+
+      _ ->
+        {reply, state} = do_ask(state, text, images)
+        {:reply, reply, state}
+    end
   end
 
   def handle_call({:transcript, limit}, _from, state), do: {:reply, transcript_of(state.history, limit), state}
@@ -117,6 +126,13 @@ defmodule LunaCore.Agent do
   end
 
   defp audit(state), do: Keyword.fetch!(state.opts, :audit)
+
+  defp quick(state, text) do
+    case Keyword.get(state.opts, :quick) do
+      nil -> nil
+      fun -> fun.(text)
+    end
+  end
 
   defp do_ask(state, text, images) do
     now = now(Keyword.get(state.opts, :zone, "Etc/UTC"))

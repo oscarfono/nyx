@@ -82,6 +82,11 @@ defmodule LunaCore.ApiTest do
     refute Jason.encode!(graph) =~ "Secret"
   end
 
+  test "the glance gives the readouts", %{core: core} do
+    core = Keyword.put(core, :glance, fn -> %{roster: %{day: 11}, money: %{off: true}} end)
+    assert {200, %{"roster" => %{"day" => 11}, "money" => %{"off" => true}}} = call(core, :get, "/api/glance")
+  end
+
   test "money is off by default", %{core: core} do
     {200, body} = call(core, :get, "/api/money")
     assert body["text"] =~ "Money is off"

@@ -54,6 +54,9 @@ defmodule LunaWeb.Core do
 
   def system, do: request(:get, "/api/system")
 
+  @doc "The readouts of the Console, made in code by the core: the roster and money."
+  def glance, do: request(:get, "/api/glance")
+
   @doc "The long-term memory graph: titles, tags and links. No note text."
   def memory_graph, do: request(:get, "/api/memory/graph")
 

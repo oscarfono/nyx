@@ -20,6 +20,10 @@ defmodule LunaWeb.Endpoint do
 
   plug Plug.RequestId
   plug Plug.Head
+  # No crawler indexes LUNA. The firewall and the tailnet keep crawlers out;
+  # these two are a second layer. robots.txt reveals nothing, so it needs no login.
+  plug :no_index
+  plug :robots
   plug Plug.Session, @session_options
   # The owner check comes before the static files, as in the Python app.
   plug LunaWeb.Owner
@@ -31,4 +35,19 @@ defmodule LunaWeb.Endpoint do
   plug Plug.Static, at: "/vendor", from: {:phoenix_live_view, "priv/static"}, only: ~w(phoenix_live_view.min.js), cache_control_for_etags: "no-cache"
 
   plug LunaWeb.Router
+
+  defp no_index(conn, _opts) do
+    Plug.Conn.register_before_send(conn, fn conn ->
+      Plug.Conn.put_resp_header(conn, "x-robots-tag", "noindex, nofollow, noarchive, nosnippet")
+    end)
+  end
+
+  defp robots(%{request_path: "/robots.txt"} = conn, _opts) do
+    conn
+    |> Plug.Conn.put_resp_content_type("text/plain")
+    |> Plug.Conn.send_resp(200, "User-agent: *\nDisallow: /\n")
+    |> Plug.Conn.halt()
+  end
+
+  defp robots(conn, _opts), do: conn
 end

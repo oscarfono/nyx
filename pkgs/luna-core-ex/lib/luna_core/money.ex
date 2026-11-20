@@ -144,6 +144,22 @@ defmodule LunaCore.Money do
     end
   end
 
+  @doc "The safe spend per week and what is left this week, for the page and the quick answers."
+  def safe(cfg) do
+    with nil <- main_problem(cfg),
+         plan = Plan.load(Path.join(cfg.root, "money.org")),
+         weekly when weekly != nil <- Plan.spend_per_week(plan),
+         {begin_date, end_date} = Report.week_window(cfg.today.()),
+         {:ok, spent_by} <- Report.balances(main(cfg), ["^expenses"], begin_date, end_date) do
+      spent = Report.total(spent_by)["AUD"] || Decimal.new(0)
+      {:ok, %{weekly: weekly, left: Decimal.sub(weekly, spent)}}
+    else
+      nil -> {:error, "The safe-to-spend number needs the income in money.org."}
+      problem when is_binary(problem) -> {:error, "No number: " <> problem}
+      {:error, message} -> {:error, "hledger failed: " <> message}
+    end
+  end
+
   @doc "The transactions with no category. The descriptions are masked."
   def unknown(cfg, limit \\ 20) do
     today = cfg.today.()

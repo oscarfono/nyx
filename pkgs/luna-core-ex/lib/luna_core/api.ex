@@ -82,6 +82,14 @@ defmodule LunaCore.Api do
     end
   end
 
+  # The readouts of the Console: the roster and money, made in code.
+  get "/api/glance" do
+    case conn.assigns.core[:glance] do
+      nil -> reply(conn, 200, %{roster: nil, money: nil})
+      fun -> reply(conn, 200, fun.())
+    end
+  end
+
   get "/api/money" do
     case conn.assigns.core[:money] do
       nil -> reply(conn, 200, %{text: "Money is off. Refer to 'The gate for phase 2' in LUNA.org."})
