@@ -50,7 +50,7 @@
 #    Registration is off, so a server that is found by bots cannot be joined by
 #    them. See the procedure section for the one account this machine needs.
 #
-{
+let
   # =====================================================================
   # The discovery file, as a store path
   # =====================================================================
@@ -61,10 +61,20 @@
   #
   # It is the file that makes the machine movable: change this URL, and the
   # homeserver can live anywhere without an MXID changing.
+  #
+  # AND IT HAS TO BE HERE, IN A let, RATHER THAN AS AN ATTRIBUTE BELOW.
+  # This file was first written with the definition sitting inside the config
+  # attrset — where it was not a variable at all but an attempt to set a NixOS
+  # option called wellKnownClient, which does not exist — while the nginx block
+  # below referred to it as one. The Director's first build found it in one
+  # line: undefined variable 'wellKnownClient'. A module attribute and a let
+  # binding look identical when indented the same way, and only one of them can
+  # be referred to by name.
   wellKnownClient = pkgs.writeText "matrix-client-wellknown.json" ''
     {"m.homeserver":{"base_url":"https://matrix.designandweb.ltd"}}
   '';
-
+in
+{
   # =====================================================================
   # The homeserver
   # =====================================================================
@@ -95,9 +105,24 @@
 
       # --- who may create an account: nobody -------------------------------
       enable_registration = false;
-      # And no CAPTCHA or email flow, because there is no registration to
-      # complete. Leaving these unset is deliberate.
-      enable_registration_without_verification = false;
+      # NOT enable_registration_without_verification.
+      #
+      # The first draft set it, on the reasoning that leaving nothing to chance
+      # is safer than leaving a key unset. Checked against the module at the
+      # revision this flake now pins (nixpkgs 0490633, 17 November 2026) and
+      # **that option does not exist** — it was removed upstream, and `settings`
+      # is written into homeserver.yaml verbatim, so a key Synapse does not
+      # recognise lands in the config file it reads at startup. An unrecognised
+      # key is a Synapse startup failure, not a warning.
+      #
+      # The lesson is the one this project keeps relearning: a defensive setting
+      # that is not verified is not defensive. Leaving the key out IS the
+      # stricter configuration, because the default is already false.
+      #
+      # Also checked at that same revision and confirmed present: settings,
+      # listeners, server_name, enable_registration, trusted_key_servers (all in
+      # the Synapse module) and settings, environmentFile, registerToSynapse (in
+      # the mautrix-telegram module). Those are the assumptions this file makes.
 
       # --- stop asking other servers for keys ------------------------------
       # With federation off there is nobody to ask, and the default behaviour
