@@ -1,4 +1,4 @@
-{ lib, beamPackages, git }:
+{ lib, beamPackages, git, hledger }:
 
 let
   pname = "luna-core-ex";
@@ -16,11 +16,12 @@ beamPackages.mixRelease {
   mixFodDeps = beamPackages.fetchMixDeps {
     pname = "${pname}-deps";
     inherit version src;
-    hash = "sha256-6mmZAOzv0VuLHk020Tqrf8p+Az+4yqe8DbXaKZ8QVVs=";
+    hash = "sha256-TvDqfzeeC55gKZO2R2o4juDH99tV9pl7gdQ7+lwnp1E=";
   };
 
   doCheck = true;
-  nativeCheckInputs = [ git ];
+  # The money tests run hledger. The memory tests run git.
+  nativeCheckInputs = [ git hledger ];
   checkPhase = ''
     runHook preCheck
     # The deps are compiled for prod only. Compile them for test from the

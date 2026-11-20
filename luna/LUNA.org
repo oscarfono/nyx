@@ -4543,9 +4543,9 @@ At the cutover, all ported tests pass, and the Python core retires.
 | 3    | The core API server                       | web                     | 9            | Done    |
 | 4    | Agent, the Claude client and tools        | (none)                  | 10 (new)     | Done    |
 | 5    | Matrix bot, Telegram                      | (none)                  | 15 (new)     | Done    |
-| 6    | Scheduler                                 | scheduler               |              | Next    |
-| 7    | Money and the Wise float                  | money, payments         |              |         |
-| 8    | GEV and REA tools (new)                   |                         |              |         |
+| 6    | Scheduler                                 | scheduler               | 8            | Done    |
+| 7    | Money and the Wise float                  | money, payments         | 35           | Done    |
+| 8    | GEV and REA tools (new)                   |                         |              | Next    |
 
 ** Changes from the Python core
 
@@ -4563,6 +4563,11 @@ At the cutover, all ported tests pass, and the Python core retires.
   In the Python bot, a long question stopped the commands until the reply.
 - After a 401 on sync, the bot deletes the session file and logs in again, once.
 - The bot renders Markdown with its own small renderer. Refer to [[*Matrix messages][Matrix messages]].
+- The money code uses =decimal= 3.2. Earlier versions had two DoS advisories
+  (EEF-CVE-2026-32686, EEF-CVE-2026-97853). Run =make deps-audit= after each lock change.
+- The transaction IDs use the same SHA-256 key as the Python core. A test makes sure of this.
+- The payment tool refuses a payment over a limit before any approval request.
+  In the Python core this was so too, but no test made sure of it.
 
 ** Package
 
@@ -4571,7 +4576,7 @@ The check compiles the dependencies for the test environment before the tests.
 The tests of =Memory= set =GIT_CONFIG_GLOBAL= to =/dev/null=, so the git configuration of the user (for example commit signing) cannot change a test.
 
 #+begin_src nix :tangle ../pkgs/luna-core-ex/default.nix
-{ lib, beamPackages, git }:
+{ lib, beamPackages, git, hledger }:
 
 let
   pname = "luna-core-ex";
@@ -4589,11 +4594,12 @@ beamPackages.mixRelease {
   mixFodDeps = beamPackages.fetchMixDeps {
     pname = "${pname}-deps";
     inherit version src;
-    hash = "sha256-6mmZAOzv0VuLHk020Tqrf8p+Az+4yqe8DbXaKZ8QVVs=";
+    hash = "sha256-TvDqfzeeC55gKZO2R2o4juDH99tV9pl7gdQ7+lwnp1E=";
   };
 
   doCheck = true;
-  nativeCheckInputs = [ git ];
+  # The money tests run hledger. The memory tests run git.
+  nativeCheckInputs = [ git hledger ];
   checkPhase = ''
     runHook preCheck
     # The deps are compiled for prod only. Compile them for test from the
@@ -4642,7 +4648,10 @@ defmodule LunaCore.MixProject do
   defp deps do
     [
       {:bandit, "~> 1.15"},
+      # 3.1.2 and later fix EEF-CVE-2026-32686 and EEF-CVE-2026-97853.
+      {:decimal, "~> 3.2"},
       {:jason, "~> 1.4"},
+      {:nimble_csv, "~> 1.2"},
       {:plug, "~> 1.18"},
       {:req, "~> 0.7"},
       {:tz, "~> 0.28"}
@@ -6303,6 +6312,1148 @@ defmodule LunaCore.Matrix.Html do
 end
 #+end_src
 
+** Money
+
+Code does all the arithmetic, with exact decimals. The model gets totals only.
+
+#+begin_src elixir :tangle ../pkgs/luna-core-ex/lib/luna_core/money/org_table.ex
+defmodule LunaCore.Money.OrgTable do
+  @moduledoc "Reads the tables in an org-mode file, by the heading above each table."
+
+  @doc "The rows of each table under its nearest heading. Rules (|-) are omitted."
+  def tables_by_heading(text) do
+    {tables, _} =
+      text
+      |> String.split("\n")
+      |> Enum.reduce({%{}, nil}, fn line, {tables, heading} ->
+        case Regex.run(~r/^\*+\s+(.*?)\s*$/, line) do
+          [_, title] ->
+            {tables, title}
+
+          nil ->
+            cells = String.trim(line)
+
+            if heading == nil or not String.starts_with?(cells, "|") or String.starts_with?(cells, "|-") do
+              {tables, heading}
+            else
+              row = cells |> String.trim("|") |> String.split("|") |> Enum.map(&String.trim/1)
+              {Map.update(tables, heading, [row], &(&1 ++ [row])), heading}
+            end
+        end
+      end)
+
+    tables
+  end
+
+  @doc "Uses the first row as the column names."
+  def records([]), do: []
+  def records([names | rows]), do: Enum.map(rows, fn row -> names |> Enum.zip(row) |> Map.new() end)
+end
+#+end_src
+
+#+begin_src elixir :tangle ../pkgs/luna-core-ex/lib/luna_core/money/rules.ex
+defmodule LunaCore.Money.Rules do
+  @moduledoc "Reads, applies and adds the category rules in money/categories.org."
+
+  alias LunaCore.Money.OrgTable
+
+  @account ~r/^(assets|liabilities|income|expenses|equity)(:[a-z0-9][a-z0-9-]*)+$/
+  @table "Rules"
+
+  @doc "The valid rules as {regex, account}, and a list of problems."
+  def load(path) do
+    rows = path |> File.read!() |> OrgTable.tables_by_heading() |> Map.get(@table, []) |> Enum.drop(1)
+
+    Enum.reduce(rows, {[], []}, fn
+      [pattern, account | _], {rules, problems} when pattern != "" ->
+        with {:ok, regex} <- compile(pattern),
+             :ok <- check_account(account) do
+          {rules ++ [{regex, account}], problems}
+        else
+          {:error, message} -> {rules, problems ++ [inspect(pattern) <> ": " <> message]}
+        end
+
+      _, acc ->
+        acc
+    end)
+  end
+
+  @doc "The account of the first rule that matches, or the unknown account."
+  def categorise(description, amount, rules) do
+    Enum.find_value(rules, fn {regex, account} -> if Regex.match?(regex, description), do: account end) ||
+      if(Decimal.negative?(amount), do: "expenses:unknown", else: "income:unknown")
+  end
+
+  @doc "Appends one rule to the table. Returns {:ok, text} or {:error, message}."
+  def add(path, pattern, account) do
+    with :ok <- if(String.contains?(pattern, ["|", "\n"]), do: {:error, "A pattern cannot contain '|' or a new line. Use two rules."}, else: :ok),
+         {:ok, _} <- compile(pattern),
+         :ok <- check_account(account) do
+      text = File.read!(path)
+      text = if String.ends_with?(text, "\n"), do: text, else: text <> "\n"
+      File.write!(path, text <> "| #{pattern} | #{account} |\n")
+      {:ok, "Added the rule #{inspect(pattern)} -> #{account}."}
+    end
+  end
+
+  defp compile(pattern) do
+    case Regex.compile(pattern, "i") do
+      {:ok, regex} -> {:ok, regex}
+      {:error, {reason, _}} -> {:error, "The pattern is not a valid regular expression: #{reason}"}
+    end
+  end
+
+  defp check_account(account) do
+    if Regex.match?(@account, account),
+      do: :ok,
+      else: {:error, "#{inspect(account)} is not a valid account. Use lower case, for example expenses:food:groceries."}
+  end
+end
+#+end_src
+
+#+begin_src elixir :tangle ../pkgs/luna-core-ex/lib/luna_core/money/plan.ex
+defmodule LunaCore.Money.Plan do
+  @moduledoc "Reads the plan in money.org, and calculates the safe-to-spend number."
+
+  alias LunaCore.Money.OrgTable
+
+  defstruct income: Decimal.new(0), costs: Decimal.new(0), buffer: Decimal.new(0), invest: Decimal.new(0), missing: []
+
+  @doc "The safe spend per week, rounded to cents (half to even), or nil with no income."
+  def spend_per_week(%__MODULE__{} = plan) do
+    if Decimal.compare(plan.income, 0) == :gt do
+      plan.income
+      |> Decimal.sub(plan.costs)
+      |> Decimal.sub(plan.buffer)
+      |> Decimal.sub(plan.invest)
+      |> Decimal.div(52)
+      |> Decimal.round(2, :half_even)
+    end
+  end
+
+  @doc "A number from a table cell. Spaces, $, commas and AUD are removed."
+  def number(nil), do: nil
+
+  def number(text) do
+    clean = Regex.replace(~r/[\s$,]|AUD/, text, "")
+
+    case clean != "" and Decimal.parse(clean) do
+      {value, ""} -> value
+      _ -> nil
+    end
+  end
+
+  def load(path) do
+    tables = path |> File.read!() |> OrgTable.tables_by_heading()
+
+    income =
+      tables
+      |> Map.get("Income", [])
+      |> OrgTable.records()
+      |> Enum.map(fn row ->
+        number(row["Net per year"]) ||
+          case {number(row["Net per pay (AUD)"]), number(row["Pays per year"])} do
+            {nil, _} -> nil
+            {_, nil} -> nil
+            {pay, pays} -> Decimal.mult(pay, pays)
+          end
+      end)
+      |> Enum.reject(&is_nil/1)
+      |> Enum.reduce(Decimal.new(0), &Decimal.add/2)
+
+    costs = tables |> Map.get("Annual costs", []) |> OrgTable.records() |> Enum.map(&number(&1["Per year (AUD)"]))
+    known = Enum.reject(costs, &is_nil/1)
+
+    targets =
+      for row <- OrgTable.records(Map.get(tables, "Targets", [])),
+          value = number(row["Per year (AUD)"]),
+          value != nil,
+          into: %{},
+          do: {String.downcase(row["Target"] || ""), value}
+
+    missing =
+      if(Decimal.compare(income, 0) == :gt, do: [], else: ["Income: write the net pay and the pays per year"]) ++
+        if(known == [], do: ["Annual costs: write the cost per year in each row"], else: [])
+
+    %__MODULE__{
+      income: income,
+      costs: Enum.reduce(known, Decimal.new(0), &Decimal.add/2),
+      buffer: Map.get(targets, "buffer", Decimal.new(0)),
+      invest: Map.get(targets, "invest", Decimal.new(0)),
+      missing: missing
+    }
+  end
+end
+#+end_src
+
+#+begin_src elixir :tangle ../pkgs/luna-core-ex/lib/luna_core/money/report.ex
+defmodule LunaCore.Money.Report do
+  @moduledoc "Runs fixed hledger reports, and returns totals. Code does all the arithmetic."
+
+  NimbleCSV.define(LunaCore.Money.CSV, separator: ",", escape: "\"")
+  alias LunaCore.Money.CSV
+
+  @doc "Runs hledger on the main journal. Returns {:ok, output} or {:error, message}."
+  def hledger(main, args) do
+    case System.find_executable("hledger") do
+      nil ->
+        {:error, "hledger is not on the PATH."}
+
+      binary ->
+        case System.cmd(binary, ["-f", main | args], stderr_to_stdout: true) do
+          {out, 0} -> {:ok, out}
+          {out, _} -> {:error, String.trim(out)}
+        end
+    end
+  end
+
+  @doc "A map of currency to amount, from a cell like \"AUD 1,234.50, NZD -3\"."
+  def parse_amounts(cell) do
+    cell
+    |> String.split(",")
+    |> Enum.map(&String.trim/1)
+    |> Enum.reject(&(&1 in ["", "0"]))
+    |> Enum.reduce(%{}, fn part, acc ->
+      case Regex.run(~r/^(?:([A-Z]{3})\s*)?(-?[\d,]*\.?\d+)(?:\s*([A-Z]{3}))?$/, part) do
+        nil ->
+          acc
+
+        match ->
+          currency = Enum.at(match, 1) |> blank_to(Enum.at(match, 3)) |> blank_to("?")
+          value = match |> Enum.at(2) |> String.replace(",", "") |> Decimal.new()
+          Map.update(acc, currency, value, &Decimal.add(&1, value))
+      end
+    end)
+  end
+
+  # The cell splits at ",", as in the Python core. The journal amounts have no
+  # thousands separator, so hledger writes none in its CSV output.
+
+  defp blank_to(nil, other), do: other
+  defp blank_to("", other), do: other
+  defp blank_to(value, _), do: value
+
+  def balances(main, query, begin_date \\ nil, end_date \\ nil) do
+    args =
+      ["balance" | query] ++
+        ["--flat", "--no-total", "--layout=bare", "-O", "csv"] ++
+        if(begin_date, do: ["-b", Date.to_iso8601(begin_date)], else: []) ++
+        if(end_date, do: ["-e", Date.to_iso8601(end_date)], else: [])
+
+    with {:ok, out} <- hledger(main, args) do
+      rows = CSV.parse_string(out, skip_headers: true)
+
+      result =
+        Enum.reduce(rows, %{}, fn
+          [account, commodity, amount | _], acc ->
+            values = parse_amounts(String.trim("#{commodity} #{amount}"))
+
+            Map.update(acc, account, values, fn old ->
+              Map.merge(old, values, fn _k, a, b -> Decimal.add(a, b) end)
+            end)
+
+          _, acc ->
+            acc
+        end)
+
+      {:ok, result}
+    end
+  end
+
+  def total(by_account) do
+    by_account
+    |> Map.values()
+    |> Enum.reduce(%{}, fn values, acc -> Map.merge(acc, values, fn _k, a, b -> Decimal.add(a, b) end) end)
+  end
+
+  @doc "\"AUD 1,234.50, NZD -3.00\", or \"0\". Zero amounts are not shown."
+  def money_text(values) do
+    shown =
+      values
+      |> Enum.sort()
+      |> Enum.reject(fn {_c, v} -> Decimal.eq?(v, 0) end)
+      |> Enum.map(fn {c, v} -> "#{c} #{format(v)}" end)
+
+    if shown == [], do: "0", else: Enum.join(shown, ", ")
+  end
+
+  @doc "A number with two decimals and thousands separators, as Python {:,.2f}."
+  def format(value) do
+    text = value |> Decimal.round(2, :half_even) |> Decimal.to_string(:normal)
+    {sign, digits} = if String.starts_with?(text, "-"), do: {"-", String.trim_leading(text, "-")}, else: {"", text}
+    [whole | rest] = String.split(digits, ".")
+    cents = rest |> List.first("") |> String.pad_trailing(2, "0")
+
+    grouped =
+      whole
+      |> String.reverse()
+      |> String.graphemes()
+      |> Enum.chunk_every(3)
+      |> Enum.map_join(",", &Enum.join/1)
+      |> String.reverse()
+
+    sign <> grouped <> "." <> cents
+  end
+
+  @doc "The last 7 days, today included. The end date is exclusive."
+  def week_window(today), do: {Date.add(today, -6), Date.add(today, 1)}
+end
+#+end_src
+
+#+begin_src elixir :tangle ../pkgs/luna-core-ex/lib/luna_core/money/import.ex
+defmodule LunaCore.Money.Import do
+  @moduledoc "Reads bank CSV files, masks account numbers, and makes hledger entries."
+
+  alias LunaCore.Money.Rules
+  alias LunaCore.Privacy
+
+  defmodule Profile do
+    @moduledoc false
+    defstruct [:name, :currency, :date, :amount, :description, :date_formats, :header,
+               columns: nil, currency_column: nil, id_column: nil]
+  end
+
+  def profiles do
+    %{
+    "commbank" => %Profile{name: "commbank", currency: "AUD", date: 0, amount: 1, description: [2], date_formats: ["%d/%m/%Y"], header: false, columns: 4},
+    "bendigo" => %Profile{name: "bendigo", currency: "AUD", date: 0, amount: 1, description: [2], date_formats: ["%d/%m/%Y"], header: false, columns: 3},
+    "up" => %Profile{name: "up", currency: "AUD", date: "Time", amount: "Total (AUD)", description: ["Payee", "Description"], date_formats: ["%Y-%m-%d"], header: true},
+    "coopnz" => %Profile{name: "coopnz", currency: "NZD", date: "Date", amount: "Amount", description: ["Details"], date_formats: ["%d/%m/%Y"], header: true},
+    "wise" => %Profile{name: "wise", currency: "AUD", date: "Date", amount: "Amount", description: ["Description", "Payee Name", "Merchant"],
+                       date_formats: ["%d-%m-%Y", "%Y-%m-%d"], header: true, currency_column: "Currency", id_column: "TransferWise ID"}
+    }
+  end
+
+  def account_for(profile, account), do: "assets:bank:#{profile}:#{String.downcase(account)}"
+
+  def profile_for(file_name) do
+    case Regex.run(~r/^([a-z]+)--([a-z0-9-]+)\.csv$/i, file_name) do
+      nil ->
+        {:error, "#{file_name}: use the name <profile>--<account>.csv, for example commbank--personal.csv."}
+
+      [_, profile, account] ->
+        case Map.fetch(profiles(), String.downcase(profile)) do
+          {:ok, p} -> {:ok, p, String.downcase(account)}
+          :error -> {:error, "#{file_name}: no profile #{inspect(String.downcase(profile))}. Profiles: #{profiles() |> Map.keys() |> Enum.sort() |> Enum.join(", ")}."}
+        end
+    end
+  end
+
+  def parse_amount(text) do
+    clean = String.trim(text)
+    negative = String.starts_with?(clean, "(") and String.ends_with?(clean, ")")
+    digits = Regex.replace(~r/[\s$,()A-Za-z]/, clean, "")
+
+    case Decimal.parse(digits) do
+      {value, ""} -> {:ok, if(negative, do: Decimal.negate(value), else: value)}
+      _ -> {:error, "#{inspect(text)} is not an amount"}
+    end
+  end
+
+  def parse_day(text, formats) do
+    clean = String.trim(text)
+
+    case Regex.run(~r/^(\d{4}-\d{2}-\d{2})/, clean) do
+      [_, iso] ->
+        Date.from_iso8601(iso) |> either("#{inspect(text)} is not a date")
+
+      nil ->
+        Enum.find_value(formats, fn format -> strptime(clean, format) end) ||
+          {:error, "#{inspect(text)} is not a date in the format #{Enum.join(formats, " or ")}"}
+    end
+  end
+
+  defp either({:ok, v}, _), do: {:ok, v}
+  defp either(_, message), do: {:error, message}
+
+  # The formats of the profiles only: %d, %m and %Y with "/" or "-".
+  defp strptime(text, format) do
+    order = Regex.scan(~r/%([dmY])/, format) |> Enum.map(fn [_, f] -> f end)
+    pattern = format |> Regex.escape() |> String.replace(["%d", "%m"], "(\\d{1,2})") |> String.replace("%Y", "(\\d{4})")
+
+    with [_ | parts] <- Regex.run(~r/^#{pattern}$/, text),
+         values = order |> Enum.zip(Enum.map(parts, &String.to_integer/1)) |> Map.new(),
+         {:ok, date} <- Date.new(values["Y"], values["m"], values["d"]) do
+      {:ok, date}
+    else
+      _ -> nil
+    end
+  end
+
+  def clean_description(parts) do
+    text =
+      parts
+      |> Enum.map(&String.trim(&1 || ""))
+      |> Enum.reject(&(&1 == ""))
+      |> Enum.join(" ")
+      # hledger reads ";" as the start of a comment, and "|" as payee|note.
+      |> then(&Regex.replace(~r/[;|]/, &1, ","))
+      |> then(&Regex.replace(~r/\s+/, &1, " "))
+      |> String.trim()
+      |> Privacy.mask_numbers()
+
+    if text == "", do: "(no description)", else: text
+  end
+
+  @doc "Returns {:ok, profile, account, transactions} or {:error, message}."
+  def read_file(path) do
+    name = Path.basename(path)
+
+    with {:ok, profile, account} <- profile_for(name) do
+      text = path |> File.read!() |> String.replace_prefix("﻿", "")
+      rows = text |> LunaCore.Money.CSV.parse_string(skip_headers: false) |> Enum.reject(fn row -> Enum.all?(row, &(String.trim(&1) == "")) end)
+
+      with :ok <- if(rows == [], do: {:error, "#{name}: the file has no rows."}, else: :ok),
+           {:ok, index, body} <- layout(profile, rows, name),
+           {:ok, transactions} <- transactions(profile, account, index, body, name) do
+        {:ok, profile, account, transactions}
+      end
+    end
+  end
+
+  defp layout(%Profile{header: true} = profile, [header | body], name) do
+    names = Enum.map(header, &String.trim/1)
+    wanted = [profile.date, profile.amount, profile.currency_column, profile.id_column | profile.description] |> Enum.filter(&is_binary/1)
+
+    case Enum.reject(wanted, &(&1 in names)) do
+      [] ->
+        {:ok, names |> Enum.with_index() |> Map.new(), body}
+
+      missing ->
+        {:error, "#{name}: the header has no column #{Enum.join(missing, ", ")}. The #{profile.name} profile is unverified. Send LUNA the header row."}
+    end
+  end
+
+  defp layout(profile, rows, name) do
+    case Enum.find_index(rows, &(length(&1) != profile.columns)) do
+      nil -> {:ok, %{}, rows}
+      i -> {:error, "#{name}: row #{i + 1} has #{length(Enum.at(rows, i))} columns. The #{profile.name} profile expects #{profile.columns}."}
+    end
+  end
+
+  defp cell(_row, nil, _index), do: ""
+
+  defp cell(row, column, index) do
+    position = if is_binary(column), do: Map.fetch!(index, column), else: column
+    Enum.at(row, position, "")
+  end
+
+  defp transactions(profile, account, index, body, name) do
+    body
+    |> Enum.with_index(1)
+    |> Enum.reduce_while({:ok, [], %{}}, fn {row, n}, {:ok, acc, seen} ->
+      with {:ok, day} <- parse_day(cell(row, profile.date, index), profile.date_formats),
+           {:ok, amount} <- parse_amount(cell(row, profile.amount, index)) do
+        currency = cell(row, profile.currency_column, index) |> String.trim() |> String.upcase()
+        currency = if currency == "", do: profile.currency, else: currency
+        raw = Enum.map(profile.description, &cell(row, &1, index))
+        external = cell(row, profile.id_column, index) |> String.trim()
+
+        {key, seen} =
+          if external != "" do
+            {[profile.name, account, "id", external], seen}
+          else
+            base = [profile.name, account, Date.to_iso8601(day), Decimal.to_string(amount, :normal), currency, Enum.join(raw, " ")]
+            count = Map.get(seen, base, 0) + 1
+            {base ++ [Integer.to_string(count)], Map.put(seen, base, count)}
+          end
+
+        id = :crypto.hash(:sha256, Enum.join(key, <<0x1F>>)) |> Base.encode16(case: :lower) |> binary_part(0, 16)
+        txn = %{day: day, amount: amount, currency: currency, description: clean_description(raw), id: id}
+        {:cont, {:ok, acc ++ [txn], seen}}
+      else
+        {:error, message} -> {:halt, {:error, "#{name}: data row #{n}: #{message}"}}
+      end
+    end)
+    |> case do
+      {:ok, txns, _} -> {:ok, txns}
+      error -> error
+    end
+  end
+
+  def existing_ids(tx_dir) do
+    Path.wildcard(Path.join(tx_dir, "*.journal"))
+    |> Enum.flat_map(fn f -> Regex.scan(~r/luna-id:([0-9a-f]{16})/, File.read!(f)) |> Enum.map(&Enum.at(&1, 1)) end)
+    |> MapSet.new()
+  end
+
+  def entry(txn, account, rules) do
+    category = Rules.categorise(txn.description, txn.amount, rules)
+    amount = Decimal.to_string(txn.amount, :normal)
+    opposite = txn.amount |> Decimal.negate() |> Decimal.to_string(:normal)
+
+    "#{Date.to_iso8601(txn.day)} #{txn.description}  ; luna-id:#{txn.id}\n" <>
+      "    #{category}  #{txn.currency} #{opposite}\n" <>
+      "    #{account}  #{txn.currency} #{amount}\n\n"
+  end
+end
+#+end_src
+
+#+begin_src elixir :tangle ../pkgs/luna-core-ex/lib/luna_core/money.ex
+defmodule LunaCore.Money do
+  @moduledoc """
+  Imports bank files, and gives the agent totals. Code does all arithmetic.
+
+  The config is a map: :root (the memory working copy), :memory (the Memory
+  server), :inbox, :audit and :today (a function that returns the date in
+  the owner zone). The core API calls summary/1 for the money panel.
+  """
+
+  alias LunaCore.{Audit, Memory}
+  alias LunaCore.Money.{Import, Plan, Report, Rules}
+
+  defp dir(cfg), do: Path.join(cfg.root, "money")
+  defp main(cfg), do: Path.join(dir(cfg), "main.journal")
+
+  # An old main.journal does not include the files that the import writes.
+  defp main_problem(cfg) do
+    case File.read(main(cfg)) do
+      {:error, _} ->
+        "money/main.journal does not exist."
+
+      {:ok, text} ->
+        if String.contains?(text, "include tx/*.journal"),
+          do: nil,
+          else:
+            "money/main.journal has no line 'include tx/*.journal', so hledger cannot see " <>
+              "the imported transactions. Add the line, or copy the seed main.journal."
+    end
+  end
+
+  @doc "Imports each CSV file in the inbox. Returns counts, not transactions."
+  def import_inbox(cfg) do
+    _ = Memory.sync(cfg.memory)
+
+    files =
+      (Path.wildcard(Path.join(cfg.inbox, "*.csv")) |> Enum.sort()) ++
+        (Path.wildcard(Path.join(cfg.inbox, "*.CSV")) |> Enum.sort())
+
+    cond do
+      (problem = main_problem(cfg)) != nil -> "No import: #{problem}"
+      files == [] -> "The inbox is empty. Send files with make money-upload."
+      true -> do_import(cfg, files)
+    end
+  end
+
+  defp do_import(cfg, files) do
+    {rules, problems} = Rules.load(Path.join(dir(cfg), "categories.org"))
+    tx_dir = Path.join(dir(cfg), "tx")
+    File.mkdir_p!(tx_dir)
+
+    {lines, done, changed, _known} =
+      Enum.reduce(files, {[], [], MapSet.new(), Import.existing_ids(tx_dir)}, fn path, {lines, done, changed, known} ->
+        name = Path.basename(path)
+
+        case Import.read_file(path) do
+          {:error, message} ->
+            Audit.write(cfg.audit, "money.import_refused", %{file: name, error: message})
+            {lines ++ ["- Kept #{name}: #{message}"], done, changed, known}
+
+          {:ok, profile, account, transactions} ->
+            ledger_account = Import.account_for(profile.name, account)
+            new = Enum.reject(transactions, &MapSet.member?(known, &1.id))
+
+            entries =
+              new
+              |> Enum.sort_by(& &1.day, Date)
+              |> Enum.map(&{&1.day.year, Import.entry(&1, ledger_account, rules)})
+
+            unknown = Enum.count(entries, fn {_, text} -> String.contains?(text, ":unknown  ") end)
+
+            changed =
+              entries
+              |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
+              |> Enum.reduce(changed, fn {year, texts}, changed ->
+                journal = Path.join(tx_dir, "#{year}.journal")
+                File.write!(journal, texts, [:append])
+                MapSet.put(changed, Path.relative_to(journal, cfg.root))
+              end)
+
+            known = Enum.reduce(new, known, &MapSet.put(&2, &1.id))
+            Audit.write(cfg.audit, "money.imported", %{file: name, new: length(new), unknown: unknown})
+
+            line = "- #{name}: #{length(new)} new, #{length(transactions) - length(new)} already imported, #{unknown} with no category"
+            {lines ++ [line], done ++ [path], changed, known}
+        end
+      end)
+
+    commit =
+      if MapSet.size(changed) > 0,
+        do: Memory.commit(cfg.memory, changed |> MapSet.to_list() |> Enum.sort(), "LUNA: import #{length(done)} bank file(s)"),
+        else: :ok
+
+    case commit do
+      {:error, message} ->
+        "The import wrote the journal, but the commit failed: #{message}. The files stay in the inbox."
+
+      :ok ->
+        Enum.each(done, &File.rm!/1)
+        lines = if problems == [], do: lines, else: lines ++ ["Rules with problems: " <> Enum.join(problems, "; ")]
+        "Import:\n" <> Enum.join(lines, "\n")
+    end
+  end
+
+  @doc "Balances, the spend of the last 7 days, and the safe-to-spend number."
+  def summary(cfg) do
+    case main_problem(cfg) do
+      nil -> do_summary(cfg)
+      problem -> "No summary: #{problem}"
+    end
+  end
+
+  defp do_summary(cfg) do
+    today = cfg.today.()
+    {begin_date, end_date} = Report.week_window(today)
+
+    with {:ok, held} <- Report.balances(main(cfg), ["^assets", "^liabilities"], nil, Date.add(today, 1)),
+         {:ok, spent_by} <- Report.balances(main(cfg), ["^expenses"], begin_date, end_date),
+         {:ok, unknown} <- Report.balances(main(cfg), ["^expenses:unknown", "^income:unknown"], Date.add(today, -30), end_date) do
+      spent = Report.total(spent_by)
+      plan = Plan.load(Path.join(cfg.root, "money.org"))
+
+      rows =
+        for {account, values} <- Enum.sort(held), Enum.any?(values, fn {_, v} -> not Decimal.eq?(v, 0) end),
+            do: "| #{account} | #{Report.money_text(values)} |"
+
+      safe =
+        case Plan.spend_per_week(plan) do
+          nil ->
+            "Safe to spend per week: not known. " <> Enum.join(plan.missing, "; ")
+
+          weekly ->
+            left = if spent["AUD"], do: Decimal.sub(weekly, spent["AUD"]), else: weekly
+            "Safe to spend per week: AUD #{Report.format(weekly)}. Left this week: AUD #{Report.format(left)}"
+        end
+
+      lines =
+        ["**Money**", "", "| Account | Balance |", "|---|---|"] ++
+          rows ++ ["", "Spent in the last 7 days: #{Report.money_text(spent)}", safe] ++
+          if(unknown == %{}, do: [], else: ["Transactions with no category in 30 days: #{Report.money_text(Report.total(unknown))}. Ask LUNA to show them."])
+
+      Enum.join(lines, "\n")
+    else
+      {:error, message} -> "hledger failed: #{message}"
+    end
+  end
+
+  @doc "The transactions with no category. The descriptions are masked."
+  def unknown(cfg, limit \\ 20) do
+    today = cfg.today.()
+    args = ["register", "^expenses:unknown", "^income:unknown", "-b", Date.to_iso8601(Date.add(today, -90)), "-O", "csv"]
+
+    case Report.hledger(main(cfg), args) do
+      {:error, message} ->
+        "hledger failed: #{message}"
+
+      {:ok, out} ->
+        [header | rows] = LunaCore.Money.CSV.parse_string(out, skip_headers: false)
+        col = fn name -> Enum.find_index(header, &(&1 == name)) end
+        rows = Enum.take(rows, -limit)
+
+        if rows == [],
+          do: "Each transaction has a category.",
+          else: Enum.map_join(rows, "\n", fn r -> "- #{Enum.at(r, col.("date"))} #{Enum.at(r, col.("description"))}: #{Enum.at(r, col.("amount"))}" end)
+    end
+  end
+
+  def add_rule(cfg, pattern, account) do
+    _ = Memory.sync(cfg.memory)
+    path = Path.join(dir(cfg), "categories.org")
+
+    with {:ok, text} <- Rules.add(path, pattern, account),
+         :ok <- Memory.commit(cfg.memory, [Path.relative_to(path, cfg.root)], "LUNA: add the rule #{pattern}") do
+      Audit.write(cfg.audit, "money.rule_added", %{pattern: pattern, account: account})
+      text <> " The rule applies to the next import."
+    else
+      {:error, message} -> "Error: " <> message
+    end
+  end
+
+  @doc "The money tools of the agent. Each tool taints the conversation."
+  def tools(cfg) do
+    alias LunaCore.Tools
+
+    [
+      %{name: "money_summary", description: "Show the balances, the spend of the last 7 days and the safe-to-spend number. Totals only.",
+        input_schema: Tools.schema(%{}),
+        run: fn _, _ -> Audit.write(cfg.audit, "tool", %{name: "money_summary"}) && {:ok, summary(cfg), "money_summary"} end},
+      %{name: "money_import", description: "Import the bank CSV files in the inbox. Return counts only.",
+        input_schema: Tools.schema(%{}),
+        run: fn _, _ -> Audit.write(cfg.audit, "tool", %{name: "money_import"}) && {:ok, import_inbox(cfg), "money_import"} end},
+      %{name: "money_unknown", description: "List recent transactions with no category. Use this only when Coops asks to see them.",
+        # Strict tool use needs each property in "required".
+        input_schema: %{"type" => "object", "properties" => %{"limit" => %{"type" => "integer", "description" => "The maximum number of transactions, 1 to 50. Use 20 when Coops gives no number."}},
+                        "required" => ["limit"], "additionalProperties" => false},
+        run: fn input, _ ->
+          limit = input |> Map.get("limit", 20) |> max(1) |> min(50)
+          Audit.write(cfg.audit, "tool", %{name: "money_unknown", limit: limit})
+          {:ok, unknown(cfg, limit), "money_unknown"}
+        end},
+      %{name: "money_add_rule", description: "Add a category rule. Git records the change.",
+        input_schema: Tools.schema(%{"pattern" => "A regular expression that matches the description. The match ignores case.",
+                                     "account" => "The hledger account, for example expenses:food:groceries."}),
+        run: fn %{"pattern" => p, "account" => a}, _ ->
+          Audit.write(cfg.audit, "tool", %{name: "money_add_rule", pattern: p, account: a})
+          {:ok, add_rule(cfg, p, a), "money_add_rule"}
+        end}
+    ]
+  end
+end
+#+end_src
+
+** The Wise float
+
+*WARNING:* A payment cannot be undone. Keep =mode = "dry-run"= until the approval flow works for some weeks.
+
+The controls are the same as in [[*Build: the Wise float][Build: the Wise float]]. The executor checks them again at the approval.
+
+#+begin_src elixir :tangle ../pkgs/luna-core-ex/lib/luna_core/payments.ex
+defmodule LunaCore.Payments do
+  @moduledoc """
+  The Wise float: the limits, the payee allowlist, the Wise client, and the executor.
+  Refer to "Build: the Wise float" in LUNA.org.
+
+  WARNING: A payment cannot be undone. Keep the mode "dry-run" until the
+  approval flow works for some weeks.
+
+  The config is a map: :settings (from settings/1), :log (the path of
+  payments.jsonl), :audit, :today and :now (functions), :notify (a function
+  of one text, or nil), and :wise (nil, or [token: _, base_url: _]).
+  """
+
+  alias LunaCore.Audit
+
+  @modes ["off", "dry-run", "draft", "auto"]
+  @draft_ttl_seconds 24 * 60 * 60
+  # Statuses that do not count toward the day total.
+  @closed ["failed", "cancelled", "expired"]
+  # Wise statuses after funding.
+  @funded ["processing", "funds_converted", "outgoing_payment_sent"]
+
+  defmodule PaymentError do
+    defexception [:message]
+  end
+
+  @doc "The settings from the JSON in the site values. Raises PaymentError for a bad mode."
+  def settings(json) do
+    data = Jason.decode!(json)
+    mode = Map.get(data, "mode", "off")
+    if mode not in @modes, do: raise(PaymentError, "The Wise mode #{inspect(mode)} is not one of #{Enum.join(@modes, ", ")}.")
+
+    payees =
+      for {name, p} <- Map.get(data, "payees", %{}), into: %{} do
+        {name, %{name: name, recipient_id: p["recipientId"], currency: String.upcase(p["currency"]), max_per_payment: dec(p["maxPerPayment"])}}
+      end
+
+    %{
+      mode: mode,
+      sandbox: Map.get(data, "sandbox", true) != false,
+      profile_type: data |> Map.get("profileType", "personal") |> String.downcase(),
+      max_per_payment: dec(Map.get(data, "maxPerPayment", 100)),
+      max_per_day: dec(Map.get(data, "maxPerDay", 200)),
+      payees: payees
+    }
+  end
+
+  defp dec(value) when is_integer(value), do: Decimal.new(value)
+  defp dec(value) when is_float(value), do: Decimal.from_float(value)
+  defp dec(value) when is_binary(value), do: Decimal.new(value)
+
+  @doc "Wise accepts a short reference. Keeps letters, digits and spaces."
+  def clean_reference(text) do
+    clean = ~r/[^A-Za-z0-9 ]/ |> Regex.replace(text, "") |> String.trim() |> String.slice(0, 18) |> String.trim()
+    if clean == "", do: "LUNA", else: clean
+  end
+
+  @doc "The idempotency key for one payment. Wise uses it to refuse a second transfer."
+  def payment_key do
+    <<a::32, b::16, c::16, d::16, e::48>> = :crypto.strong_rand_bytes(16)
+    :io_lib.format("~8.16.0b-~4.16.0b-4~3.16.0b-~4.16.0b-~12.16.0b", [a, b, Bitwise.band(c, 0x0FFF), Bitwise.bor(Bitwise.band(d, 0x3FFF), 0x8000), e])
+    |> IO.iodata_to_binary()
+  end
+
+  # The log of payments. The last record of a payment is its state.
+
+  @doc "The state of each payment. The time stays the time of the first record."
+  def latest(path) do
+    case File.read(path) do
+      {:error, _} ->
+        %{}
+
+      {:ok, text} ->
+        text
+        |> String.split("\n", trim: true)
+        |> Enum.map(&Jason.decode!/1)
+        |> Enum.reduce(%{}, fn record, state ->
+          previous = Map.get(state, record["id"], %{})
+          Map.put(state, record["id"], Map.merge(previous, record) |> Map.put("time", previous["time"] || record["time"]))
+        end)
+    end
+  end
+
+  def total_for(path, day, currency) do
+    for {_id, r} <- latest(path), r["day"] == Date.to_iso8601(day), r["currency"] == currency, r["status"] not in @closed,
+        reduce: Decimal.new(0),
+        do: (acc -> Decimal.add(acc, Decimal.new(r["amount"])))
+  end
+
+  defp log_write(cfg, record) do
+    record = Map.put_new(record, "time", DateTime.to_iso8601(cfg.now.()))
+    line = record |> Enum.sort() |> Jason.OrderedObject.new() |> Jason.encode!()
+    File.write!(cfg.log, line <> "\n", [:append])
+  end
+
+  @doc "Applies each control. Returns {payee, amount}, or raises PaymentError."
+  def check(settings, log, payee, amount_text, currency, day) do
+    if settings.mode == "off", do: raise(PaymentError, "Payments are off.")
+
+    target =
+      Map.get(settings.payees, payee) ||
+        raise(PaymentError, "#{inspect(payee)} is not on the allowlist. Allowed: #{allowed(settings)}.")
+
+    amount =
+      case Decimal.parse(to_string(amount_text)) do
+        {value, ""} -> Decimal.round(value, 2, :half_even)
+        _ -> raise(PaymentError, "#{inspect(amount_text)} is not an amount.")
+      end
+
+    if String.upcase(currency) != target.currency,
+      do: raise(PaymentError, "#{payee} takes #{target.currency}, not #{String.upcase(currency)}.")
+
+    if Decimal.compare(amount, 0) != :gt, do: raise(PaymentError, "The amount must be more than zero.")
+
+    limit = Decimal.min(target.max_per_payment, settings.max_per_payment)
+
+    if Decimal.gt?(amount, limit),
+      do: raise(PaymentError, "#{target.currency} #{amount} is more than the limit of #{target.currency} #{limit}.")
+
+    day_total = Decimal.add(total_for(log, day, target.currency), amount)
+
+    if Decimal.gt?(day_total, settings.max_per_day),
+      do:
+        raise(PaymentError,
+          "The day total would be #{target.currency} #{day_total}. The limit per day is #{target.currency} #{settings.max_per_day}.")
+
+    {target, amount}
+  end
+
+  defp allowed(settings) do
+    case settings.payees |> Map.keys() |> Enum.sort() do
+      [] -> "none"
+      names -> Enum.join(names, ", ")
+    end
+  end
+
+  def summary(payee, amount, currency, reference, reason) do
+    "Pay **#{payee}** #{currency} #{amount}, reference \"#{reference}\".\nReason: #{reason}\n" <>
+      "Auto: after your approval, LUNA makes and funds the transfer."
+  end
+
+  # The Wise client: the few API calls that the float uses.
+
+  defp wise(cfg, method, path, body \\ nil) do
+    opts = cfg.wise || raise(PaymentError, "No Wise token. Add wise-api-token to the secrets.")
+    base = opts[:base_url] || if(cfg.settings.sandbox, do: "https://api.wise-sandbox.com", else: "https://api.wise.com")
+    request = [method: method, url: base <> path, headers: [{"authorization", "Bearer " <> opts[:token]}], retry: false, receive_timeout: 30_000]
+    request = if body, do: Keyword.put(request, :json, body), else: request
+
+    case Req.request(request) do
+      {:ok, %{status: status, body: body}} when status < 400 -> body
+      {:ok, %{status: status, body: body}} -> raise(PaymentError, "Wise refused #{method |> to_string() |> String.upcase()} #{path}: HTTP #{status} #{body |> inspect() |> String.slice(0, 200)}")
+      {:error, exception} -> raise(PaymentError, "Wise did not answer: #{Exception.message(exception)}")
+    end
+  end
+
+  defp profile_id(cfg) do
+    Enum.find_value(wise(cfg, :get, "/v1/profiles"), fn p -> if String.downcase(to_string(p["type"])) == cfg.settings.profile_type, do: p["id"] end) ||
+      raise(PaymentError, "No #{cfg.settings.profile_type} profile on this Wise account.")
+  end
+
+  defp send_transfer(cfg, params, fund?) do
+    target = Map.fetch!(cfg.settings.payees, params["payee"])
+    profile = profile_id(cfg)
+    amount = params["amount"] |> Decimal.new() |> Decimal.to_float()
+    quote = wise(cfg, :post, "/v3/profiles/#{profile}/quotes", %{"sourceCurrency" => target.currency, "targetCurrency" => target.currency, "targetAmount" => amount})
+
+    transfer =
+      wise(cfg, :post, "/v1/transfers", %{
+        "targetAccount" => target.recipient_id,
+        "quoteUuid" => to_string(quote["id"]),
+        "customerTransactionId" => params["key"],
+        "details" => %{"reference" => params["reference"]}
+      })
+
+    if fund?, do: wise(cfg, :post, "/v3/profiles/#{profile}/transfers/#{transfer["id"]}/payments", %{"type" => "BALANCE"})
+    transfer
+  end
+
+  defp tell(cfg, text), do: if(cfg[:notify], do: cfg.notify.(text))
+
+  defp record(cfg, key, target, value, day) do
+    %{"id" => key, "day" => Date.to_iso8601(day), "payee" => target.name, "amount" => Decimal.to_string(value, :normal),
+      "currency" => target.currency, "mode" => cfg.settings.mode, "time" => DateTime.to_iso8601(cfg.now.())}
+  end
+
+  @doc "The tool path for dry-run and draft modes. In draft mode the Wise app is the approval."
+  def request(cfg, payee, amount, currency, reference, key) do
+    day = cfg.today.()
+    {target, value} = check(cfg.settings, cfg.log, payee, amount, currency, day)
+    params = %{"payee" => target.name, "amount" => Decimal.to_string(value, :normal), "currency" => target.currency, "reference" => clean_reference(reference), "key" => key}
+    rec = record(cfg, key, target, value, day)
+
+    if cfg.settings.mode == "dry-run" do
+      log_write(cfg, Map.put(rec, "status", "dry-run"))
+      "Dry run: LUNA would make a Wise transfer of #{target.currency} #{value} to #{target.name}, for you to approve in the Wise app. LUNA sent nothing."
+    else
+      transfer =
+        try do
+          send_transfer(cfg, params, false)
+        rescue
+          error in PaymentError ->
+            log_write(cfg, rec |> Map.put("status", "failed") |> Map.put("error", error.message))
+            reraise error, __STACKTRACE__
+        end
+
+      log_write(cfg, rec |> Map.put("status", "draft") |> Map.put("transfer_id", transfer["id"]))
+      Audit.write(cfg.audit, "payment.draft", %{payee: target.name, amount: Decimal.to_string(value, :normal), transfer_id: transfer["id"]})
+
+      text =
+        "**Approve in the Wise app:** transfer #{transfer["id"]}, #{target.currency} #{value} to #{target.name}. " <>
+          "To deny, cancel it in the app or do nothing. LUNA cancels it after 24 hours."
+
+      tell(cfg, text)
+      text
+    end
+  end
+
+  @doc "The approval executor, for auto mode. It checks the limits again first."
+  def execute(cfg, params) do
+    day = cfg.today.()
+    {target, value} = check(cfg.settings, cfg.log, params["payee"], params["amount"], params["currency"], day)
+    rec = record(cfg, params["key"], target, value, day)
+
+    transfer =
+      try do
+        send_transfer(cfg, params, true)
+      rescue
+        error in PaymentError ->
+          log_write(cfg, rec |> Map.put("status", "failed") |> Map.put("error", error.message))
+          reraise error, __STACKTRACE__
+      end
+
+    log_write(cfg, rec |> Map.put("status", "funded") |> Map.put("transfer_id", transfer["id"]))
+    Audit.write(cfg.audit, "payment.funded", %{payee: target.name, amount: Decimal.to_string(value, :normal), transfer_id: transfer["id"]})
+    "Sent #{target.currency} #{value} to #{target.name}. Wise transfer #{transfer["id"]}."
+  end
+
+  @doc "Reports funded drafts. Cancels drafts that wait for more than 24 hours."
+  def watch_once(%{wise: nil}), do: :ok
+
+  def watch_once(cfg) do
+    for {key, r} <- latest(cfg.log), r["status"] == "draft" do
+      id = r["transfer_id"]
+      status = to_string(wise(cfg, :get, "/v1/transfers/#{id}")["status"])
+      label = "#{r["currency"]} #{r["amount"]} to #{r["payee"]} (transfer #{id})"
+      {:ok, created, _} = DateTime.from_iso8601(r["time"])
+
+      cond do
+        status in @funded ->
+          log_write(cfg, %{"id" => key, "status" => "funded", "wise_status" => status})
+          Audit.write(cfg.audit, "payment.funded", %{transfer_id: id})
+          tell(cfg, "You approved #{label} in the Wise app. Wise is sending it.")
+
+        status == "cancelled" ->
+          log_write(cfg, %{"id" => key, "status" => "cancelled"})
+          tell(cfg, "You cancelled #{label}.")
+
+        DateTime.diff(cfg.now.(), created) > @draft_ttl_seconds ->
+          wise(cfg, :put, "/v1/transfers/#{id}/cancel")
+          log_write(cfg, %{"id" => key, "status" => "expired"})
+          Audit.write(cfg.audit, "payment.expired", %{transfer_id: id})
+          tell(cfg, "LUNA cancelled #{label}. Nobody funded it in 24 hours.")
+
+        true ->
+          :ok
+      end
+    end
+
+    :ok
+  end
+
+  @doc """
+  The payment tool. In draft mode the Wise app is the approval; in auto mode,
+  Matrix. This function also registers the executor with the approvals.
+  """
+  def tools(cfg, approvals) do
+    :ok = LunaCore.Approvals.register(approvals, "wise_transfer", &execute(cfg, &1))
+
+    [
+      %{
+        name: "payment_request",
+        description:
+          "Request a payment from the Wise float to a payee on the allowlist. No money moves now. " <>
+            "Coops approves in the Wise app (draft mode) or in Matrix (auto mode).",
+        input_schema:
+          LunaCore.Tools.schema(%{
+            "payee" => "The name of the payee on the allowlist.",
+            "amount" => ~s(The amount, for example "45.00".),
+            "currency" => ~s(The currency code of the payee, for example "AUD".),
+            "reference" => "The payment reference. Wise keeps 18 letters, digits and spaces.",
+            "reason" => "Why LUNA asks for this payment, in one sentence."
+          }),
+        run: fn %{"payee" => payee, "amount" => amount, "currency" => currency, "reference" => reference, "reason" => reason}, _ctx ->
+          Audit.write(cfg.audit, "tool", %{name: "payment_request", payee: payee, amount: amount, currency: currency, reason: reason})
+
+          try do
+            if cfg.settings.mode in ["dry-run", "draft"] do
+              {:ok, request(cfg, payee, amount, currency, reference, payment_key())}
+            else
+              {target, value} = check(cfg.settings, cfg.log, payee, amount, currency, cfg.today.())
+              ref = clean_reference(reference)
+              params = %{"payee" => target.name, "amount" => Decimal.to_string(value, :normal), "currency" => target.currency, "reference" => ref, "key" => payment_key()}
+              {:ok, item} = LunaCore.Approvals.request(approvals, "wise_transfer", params, summary(target.name, value, target.currency, ref, reason))
+              {:ok, "Approval request #{item.id} sent to Coops in Matrix."}
+            end
+          rescue
+            error in PaymentError -> {:ok, "Refused: " <> error.message}
+          end
+        end
+      }
+    ]
+  end
+end
+#+end_src
+
+** Scheduler
+
+The brief runs in a fresh conversation, so it does not mix with the chat.
+The job waits one minute more than the time, so a clock that runs early cannot run the brief twice.
+
+#+begin_src elixir :tangle ../pkgs/luna-core-ex/lib/luna_core/scheduler.ex
+defmodule LunaCore.Scheduler do
+  @moduledoc """
+  The scheduled jobs: the morning brief and the memory sync.
+  Each job is a GenServer. A failure goes to the audit log, and the job
+  goes on. The Wise watcher comes with the money port (step 7).
+  """
+
+  @brief_prompt """
+  Write the morning brief for today. First read roster.org, money.org,
+  projects.org and travel.org. Then give, in this order and in less than 200 words:
+  1. Where Coops is in the roster, and the days to the next change.
+  2. Money: the safe-to-spend number and any cost due in the next 14 days.
+  3. The SHIP project: one next step for today.
+  4. One action for the next off-swing, if the next off-swing is in 30 days or less.
+  If a file has no data yet, say which data you need. Write the brief to
+  briefs/<YYYY>.org with the heading "Brief <YYYY-MM-DD>".
+  """
+
+  def brief_prompt, do: @brief_prompt
+
+  @doc "The next time at the hour and minute, in the zone of now. Today if it is still to come."
+  def next_run(%DateTime{} = now, %Time{} = at) do
+    today = at_time(DateTime.to_date(now), at, now.time_zone)
+
+    if DateTime.compare(today, now) == :gt,
+      do: today,
+      else: at_time(Date.add(DateTime.to_date(now), 1), at, now.time_zone)
+  end
+
+  defp at_time(date, at, zone) do
+    case DateTime.new(date, Time.new!(at.hour, at.minute, 0), zone) do
+      {:ok, dt} -> dt
+      # A daylight-saving change: take the first valid time.
+      {:ambiguous, first, _} -> first
+      {:gap, _, after_gap} -> after_gap
+    end
+  end
+
+  @doc """
+  The text of the brief. The system notice comes first. On Monday, the money
+  summary comes last: code makes those numbers, not the model.
+  """
+  def compose(text, notice, money_summary) do
+    [notice, text, money_summary] |> Enum.reject(&is_nil/1) |> Enum.join("\n\n")
+  end
+
+  defmodule Brief do
+    @moduledoc """
+    The morning brief. Options: :at (Time), :zone, :audit, and functions:
+    :ask (prompt -> text, in a fresh conversation), :send (text -> any),
+    :notice (date -> nil or text), :money (nil, or a function -> text).
+    """
+    use GenServer
+
+    alias LunaCore.{Audit, Scheduler}
+
+    def start_link(opts), do: GenServer.start_link(__MODULE__, opts, name: Keyword.get(opts, :name, __MODULE__))
+
+    @doc "Runs the brief now, in the process of the caller. For tests and for a manual run."
+    def run_once(opts) do
+      now = DateTime.now!(Keyword.get(opts, :zone, "Etc/UTC"))
+      text = Keyword.fetch!(opts, :ask).(Scheduler.brief_prompt())
+      notice = Keyword.get(opts, :notice, fn _ -> nil end).(DateTime.to_date(now))
+      money = Keyword.get(opts, :money)
+      summary = if money != nil and Date.day_of_week(now) == 1, do: money.(), else: nil
+      Keyword.fetch!(opts, :send).(Scheduler.compose(text, notice, summary))
+      Audit.write(Keyword.fetch!(opts, :audit), "brief.sent")
+      :ok
+    rescue
+      error ->
+        Audit.write(Keyword.fetch!(opts, :audit), "brief.error", %{error: Exception.message(error)})
+        :error
+    end
+
+    @impl true
+    def init(opts), do: {:ok, schedule(opts)}
+
+    @impl true
+    def handle_info(:run, opts) do
+      # The brief can take minutes. It runs in a task, so a crash cannot stop the job.
+      Task.start(fn -> run_once(opts) end)
+      {:noreply, schedule(opts)}
+    end
+
+    defp schedule(opts) do
+      now = DateTime.now!(Keyword.get(opts, :zone, "Etc/UTC"))
+      next = Scheduler.next_run(now, Keyword.fetch!(opts, :at))
+      # One minute more, so that a clock that runs early cannot run the brief twice.
+      Process.send_after(self(), :run, DateTime.diff(next, now, :millisecond) + 60_000)
+      opts
+    end
+  end
+
+  defmodule Sync do
+    @moduledoc "Pulls the memory hub into the working copy, each five minutes. Options: :memory, :audit, :every (ms)."
+    use GenServer
+
+    alias LunaCore.{Audit, Memory}
+
+    def start_link(opts), do: GenServer.start_link(__MODULE__, opts, name: Keyword.get(opts, :name, __MODULE__))
+
+    def run_once(opts) do
+      case Memory.sync(Keyword.fetch!(opts, :memory)) do
+        :ok -> :ok
+        {:error, message} -> Audit.write(Keyword.fetch!(opts, :audit), "memory.sync_error", %{error: message})
+      end
+    end
+
+    @impl true
+    def init(opts) do
+      Process.send_after(self(), :run, Keyword.get(opts, :every, :timer.minutes(5)))
+      {:ok, opts}
+    end
+
+    @impl true
+    def handle_info(:run, opts) do
+      run_once(opts)
+      Process.send_after(self(), :run, Keyword.get(opts, :every, :timer.minutes(5)))
+      {:noreply, opts}
+    end
+  end
+end
+#+end_src
+
 ** Telegram
 
 #+begin_src elixir :tangle ../pkgs/luna-core-ex/lib/luna_core/telegram.ex
@@ -6890,6 +8041,459 @@ defmodule LunaCore.Matrix.HtmlTest do
   test "no tag has an attribute" do
     html = render(~s|**[a](javascript:alert(1))** `x" onclick="y`|)
     refute Regex.match?(~r/<[a-z0-9]+\s/, html)
+  end
+end
+#+end_src
+
+#+begin_src elixir :tangle ../pkgs/luna-core-ex/test/scheduler_test.exs
+defmodule LunaCore.SchedulerTest do
+  use ExUnit.Case, async: true
+
+  alias LunaCore.Scheduler
+  alias LunaCore.Scheduler.{Brief, Sync}
+
+  @moduletag :tmp_dir
+
+  defp perth(naive), do: DateTime.from_naive!(naive, "Australia/Perth")
+
+  test "the next run is today before the time" do
+    assert Scheduler.next_run(perth(~N[2026-11-20 06:00:00]), ~T[07:00:00]) == perth(~N[2026-11-20 07:00:00])
+  end
+
+  test "the next run is tomorrow after the time" do
+    assert Scheduler.next_run(perth(~N[2026-11-20 08:00:00]), ~T[07:00:00]) == perth(~N[2026-11-21 07:00:00])
+  end
+
+  test "the next run is tomorrow at the time exactly" do
+    assert Scheduler.next_run(perth(~N[2026-11-20 07:00:00]), ~T[07:00:00]) == perth(~N[2026-11-21 07:00:00])
+  end
+
+  test "the next run in a zone with daylight saving takes a valid time" do
+    # Sydney skips 02:00 to 03:00 on 2026-10-04.
+    now = DateTime.from_naive!(~N[2026-10-03 23:00:00], "Australia/Sydney")
+    next = Scheduler.next_run(now, ~T[02:30:00])
+    assert DateTime.to_date(next) == ~D[2026-10-04]
+    assert next.hour == 3
+  end
+
+  test "compose puts the notice first and the money last" do
+    assert Scheduler.compose("Brief.", "Notice.", "Money.") == "Notice.\n\nBrief.\n\nMoney."
+    assert Scheduler.compose("Brief.", nil, nil) == "Brief."
+  end
+
+  test "the brief goes to the owner with the system notice", %{tmp_dir: tmp} do
+    audit = Path.join(tmp, "audit.jsonl")
+    test = self()
+
+    opts = [
+      zone: "Australia/Perth", audit: audit,
+      ask: fn prompt -> send(test, {:prompt, prompt}) && "Day 3 of 14 on site." end,
+      send: fn text -> send(test, {:sent, text}) end,
+      notice: fn _date -> "System notice: old nixpkgs." end
+    ]
+
+    assert Brief.run_once(opts) == :ok
+    assert_received {:prompt, prompt}
+    assert prompt =~ "morning brief"
+    assert_received {:sent, "System notice: old nixpkgs.\n\nDay 3 of 14 on site."}
+    assert File.read!(audit) =~ "brief.sent"
+  end
+
+  test "a failed brief goes to the audit log, and run_once does not crash", %{tmp_dir: tmp} do
+    audit = Path.join(tmp, "audit.jsonl")
+    opts = [audit: audit, ask: fn _ -> raise "API down" end, send: fn _ -> :ok end]
+    assert Brief.run_once(opts) == :error
+    assert File.read!(audit) =~ "brief.error"
+  end
+
+  test "a failed memory sync goes to the audit log", %{tmp_dir: tmp} do
+    audit = Path.join(tmp, "audit.jsonl")
+    # A working copy with no remote: git pull fails.
+    root = Path.join(tmp, "memory")
+    {_, 0} = System.cmd("git", ["init", "--quiet", root])
+    {:ok, memory} = LunaCore.Memory.start_link(root: root, audit: audit, remote: true, name: nil)
+    Sync.run_once(memory: memory, audit: audit)
+    assert File.read!(audit) =~ "memory.sync_error"
+  end
+end
+#+end_src
+
+#+begin_src elixir :tangle ../pkgs/luna-core-ex/test/money_test.exs
+defmodule LunaCore.MoneyTest do
+  use ExUnit.Case, async: true
+
+  alias LunaCore.{Memory, Money}
+  alias LunaCore.Money.{Plan, Rules}
+
+  @moduletag :tmp_dir
+
+  @rules Enum.join([
+           "#+TITLE: Categories", "* Rules", "| Pattern | Account |", "|---------+---------|",
+           "| woolworths | expenses:food:groceries |", "| transfer to | assets:transfers |",
+           "| transfer from | assets:transfers |", "| afterpay | liabilities:afterpay |", ""
+         ], "\n")
+
+  @plan Enum.join([
+          "* Income", "| Source | Net per pay (AUD) | Pays per year | Net per year |", "| FIFO | 3,000.00 | 26 | |",
+          "* Annual costs", "| Category | Item | Per year (AUD) | Due | Bucket |",
+          "| Phone | Plan | 600 | Monthly | Bills |", "| Housing | Stays | 15,000 | Each swing | Bills |",
+          "* Targets", "| Target | Per year (AUD) |", "| Buffer | 6,000 |", "| Invest | 10,000 |", ""
+        ], "\n")
+
+  @files %{
+    "commbank--personal.csv" => Enum.join([
+      ~s(20/11/2026,"-12.34","WOOLWORTHS 1234 PERTH Card xx4111 1111 1111 1111","+100.00"),
+      ~s(21/11/2026,"-500.00","Transfer to xx062000 12345678","-400.00"),
+      ~s(21/11/2026,"-9.99","NETFLIX","-409.99")
+    ], "\n"),
+    "bendigo--savings.csv" => ~s(22/11/2026,"500.00","Transfer from CBA 12345678"\n),
+    "up--spending.csv" => "Time,Payee,Description,Total (AUD)\n2026-11-22T09:15:00+08:00,Afterpay,Repayment,-50.00",
+    "coopnz--everyday.csv" => "Date,Details,Amount\n19/11/2026,Countdown,-20.50\n",
+    "wise--main.csv" => "TransferWise ID,Date,Amount,Currency,Description,Payee Name,Merchant\nTRANSFER-123456789,18-11-2026,-30.00,USD,Card transaction,,GitHub"
+  }
+
+  setup %{tmp_dir: tmp} do
+    for {k, v} <- [{"GIT_CONFIG_GLOBAL", "/dev/null"}, {"GIT_CONFIG_NOSYSTEM", "1"}, {"GIT_AUTHOR_NAME", "t"},
+                   {"GIT_COMMITTER_NAME", "t"}, {"GIT_AUTHOR_EMAIL", "t@example.com"}, {"GIT_COMMITTER_EMAIL", "t@example.com"}],
+        do: System.put_env(k, v)
+
+    root = Path.join(tmp, "memory")
+    File.mkdir_p!(Path.join(root, "money/tx"))
+    File.write!(Path.join(root, "money/main.journal"), "include accounts.journal\ninclude tx/*.journal\n")
+    File.write!(Path.join(root, "money/accounts.journal"), "account assets  ; type: A\n")
+    File.write!(Path.join(root, "money/tx/opening.journal"), "; Opening balances.\n")
+    File.write!(Path.join(root, "money/categories.org"), @rules)
+    File.write!(Path.join(root, "money.org"), @plan)
+    {_, 0} = System.cmd("git", ["init", "--quiet", root])
+    {_, 0} = System.cmd("git", ["-C", root, "add", "-A"])
+    {_, 0} = System.cmd("git", ["-C", root, "commit", "--quiet", "-m", "seed"])
+    inbox = Path.join(tmp, "inbox")
+    File.mkdir_p!(inbox)
+    audit = Path.join(tmp, "audit.jsonl")
+    {:ok, memory} = Memory.start_link(root: root, audit: audit, remote: false, name: nil)
+    cfg = %{root: root, memory: memory, inbox: inbox, audit: audit, today: fn -> ~D[2026-11-23] end}
+    %{cfg: cfg, tmp: tmp}
+  end
+
+  defp upload(cfg, names), do: for(n <- names, do: File.write!(Path.join(cfg.inbox, n), @files[n]))
+  defp journal(cfg), do: File.read!(Path.join(cfg.root, "money/tx/2026.journal"))
+
+  test "import all profiles", %{cfg: cfg} do
+    upload(cfg, Map.keys(@files))
+    report = Money.import_inbox(cfg)
+    refute report =~ "Kept", report
+    text = journal(cfg)
+    assert text =~ "expenses:food:groceries  AUD 12.34"
+    assert text =~ "assets:bank:commbank:personal  AUD -12.34"
+    assert text =~ "liabilities:afterpay  AUD 50.00"
+    assert text =~ "assets:bank:coopnz:everyday  NZD -20.50"
+    assert text =~ "assets:bank:wise:main  USD -30.00"
+    assert File.ls!(cfg.inbox) == []
+  end
+
+  test "the import masks numbers", %{cfg: cfg} do
+    upload(cfg, ["commbank--personal.csv"])
+    Money.import_inbox(cfg)
+    text = journal(cfg)
+    refute text =~ "4111 1111" or text =~ "12345678"
+    assert text =~ "************1111"
+  end
+
+  test "a second import adds nothing", %{cfg: cfg} do
+    upload(cfg, ["commbank--personal.csv"])
+    Money.import_inbox(cfg)
+    first = journal(cfg)
+    upload(cfg, ["commbank--personal.csv"])
+    assert Money.import_inbox(cfg) =~ "0 new, 3 already imported"
+    assert journal(cfg) == first
+  end
+
+  test "the import commits, and never commits a CSV file", %{cfg: cfg} do
+    upload(cfg, ["up--spending.csv"])
+    Money.import_inbox(cfg)
+    {files, 0} = System.cmd("git", ["-C", cfg.root, "ls-files"])
+    assert files =~ "money/tx/2026.journal"
+    refute files =~ ".csv"
+  end
+
+  test "a wrong header keeps the file", %{cfg: cfg} do
+    File.write!(Path.join(cfg.inbox, "up--spending.csv"), "Date,Thing,Value\n2026-11-22,x,1\n")
+    report = Money.import_inbox(cfg)
+    assert report =~ "Kept up--spending.csv" and report =~ "Send LUNA the header row"
+    assert File.exists?(Path.join(cfg.inbox, "up--spending.csv"))
+  end
+
+  test "a wrong column count keeps the file", %{cfg: cfg} do
+    File.write!(Path.join(cfg.inbox, "commbank--personal.csv"), "20/11/2026,-1.00,X\n")
+    assert Money.import_inbox(cfg) =~ "expects 4"
+  end
+
+  test "a bad file name is refused", %{cfg: cfg} do
+    File.write!(Path.join(cfg.inbox, "statement.csv"), "x\n")
+    assert Money.import_inbox(cfg) =~ "<profile>--<account>.csv"
+  end
+
+  test "transfers cancel", %{cfg: cfg} do
+    upload(cfg, ["commbank--personal.csv", "bendigo--savings.csv"])
+    Money.import_inbox(cfg)
+    refute Money.summary(cfg) =~ "assets:transfers"
+  end
+
+  test "the summary", %{cfg: cfg} do
+    upload(cfg, Map.keys(@files))
+    Money.import_inbox(cfg)
+    text = Money.summary(cfg)
+    assert text =~ "assets:bank:commbank:personal | AUD -522.33"
+    # 3000 * 26 = 78000; minus 15600 costs, 6000 buffer, 10000 invest; / 52
+    assert text =~ "Safe to spend per week: AUD 892.31"
+    assert text =~ "no category"
+  end
+
+  test "unknown lists the masked transactions", %{cfg: cfg} do
+    upload(cfg, ["commbank--personal.csv"])
+    Money.import_inbox(cfg)
+    text = Money.unknown(cfg)
+    assert text =~ "NETFLIX"
+    refute text =~ "WOOLWORTHS"
+  end
+
+  test "the plan reports missing income", %{tmp: tmp} do
+    path = Path.join(tmp, "plan.org")
+    File.write!(path, "* Income\n| Source | Net per pay (AUD) | Pays per year | Net per year |\n| FIFO | | | |\n")
+    plan = Plan.load(path)
+    assert Plan.spend_per_week(plan) == nil and plan.missing != []
+  end
+
+  for {pattern, account} <- [{"a|b", "expenses:x"}, {"(", "expenses:x"}, {"ok", "Expenses"}] do
+    test "the bad rule #{pattern} #{account} is refused", %{tmp: tmp} do
+      path = Path.join(tmp, "categories.org")
+      File.write!(path, @rules)
+      assert {:error, _} = Rules.add(path, unquote(pattern), unquote(account))
+    end
+  end
+
+  test "an old main.journal is refused", %{cfg: cfg} do
+    File.write!(Path.join(cfg.root, "money/main.journal"), "~ every 4 weeks  pay\n    assets:income  AUD 0\n    income:fifo\n")
+    upload(cfg, ["commbank--personal.csv"])
+    assert Money.import_inbox(cfg) =~ "include tx/*.journal"
+    assert File.exists?(Path.join(cfg.inbox, "commbank--personal.csv"))
+  end
+
+  test "a new rule applies to the next import", %{cfg: cfg} do
+    assert Money.add_rule(cfg, "netflix", "expenses:subscriptions") =~ "Added"
+    upload(cfg, ["commbank--personal.csv"])
+    Money.import_inbox(cfg)
+    assert journal(cfg) =~ "expenses:subscriptions  AUD 9.99"
+  end
+
+  test "the IDs are the same as the IDs of the Python core" do
+    # Python: sha256("commbank\x1fpersonal\x1f2026-11-21\x1f-9.99\x1fAUD\x1fNETFLIX\x1f1")[:16]
+    key = Enum.join(["commbank", "personal", "2026-11-21", "-9.99", "AUD", "NETFLIX", "1"], <<0x1F>>)
+    expected = :crypto.hash(:sha256, key) |> Base.encode16(case: :lower) |> binary_part(0, 16)
+    {:ok, _, _, txns} = LunaCore.Money.Import.read_file(write_tmp("commbank--personal.csv", @files["commbank--personal.csv"]))
+    assert Enum.at(txns, 2).id == expected
+  end
+
+  defp write_tmp(name, text) do
+    dir = Path.join(System.tmp_dir!(), "luna-money-#{System.unique_integer([:positive])}")
+    File.mkdir_p!(dir)
+    path = Path.join(dir, name)
+    File.write!(path, text)
+    path
+  end
+
+  test "the money tools mark the taint", %{cfg: cfg} do
+    for tool <- Money.tools(cfg), tool.name == "money_summary" do
+      assert {:ok, _text, "money_summary"} = tool.run.(%{}, %{taint: nil})
+    end
+  end
+end
+#+end_src
+
+#+begin_src elixir :tangle ../pkgs/luna-core-ex/test/support/fake_wise.ex
+defmodule LunaCore.FakeWise do
+  @moduledoc "A fake Wise API. Each test starts its own. It keeps each call: {method, path}."
+  @behaviour Plug
+  import Plug.Conn
+
+  def start do
+    {:ok, state} = Agent.start_link(fn -> %{calls: [], status: "incoming_payment_waiting"} end)
+    {:ok, server} = Bandit.start_link(plug: {__MODULE__, state}, ip: {127, 0, 0, 1}, port: 0, startup_log: false)
+    {:ok, {_ip, port}} = ThousandIsland.listener_info(server)
+    %{state: state, url: "http://127.0.0.1:#{port}"}
+  end
+
+  def calls(%{state: s}), do: Agent.get(s, &Enum.reverse(&1.calls))
+  def set_status(%{state: s}, status), do: Agent.update(s, &%{&1 | status: status})
+
+  @impl true
+  def init(state), do: state
+
+  @impl true
+  def call(conn, state) do
+    {:ok, raw, conn} = read_body(conn)
+    Agent.update(state, &%{&1 | calls: [{conn.method, conn.request_path} | &1.calls]})
+    body = if raw == "", do: %{}, else: Jason.decode!(raw)
+
+    case {conn.method, conn.path_info} do
+      {"GET", ["v1", "profiles"]} -> json(conn, [%{"id" => 7, "type" => "PERSONAL"}])
+      {"POST", ["v3", "profiles", _, "quotes"]} -> json(conn, %{"id" => "q-1"})
+      {"POST", ["v1", "transfers"]} ->
+        if body["targetAccount"] == 42 and body["quoteUuid"] == "q-1",
+          do: json(conn, %{"id" => 555, "status" => "incoming_payment_waiting"}),
+          else: send_resp(conn, 422, "bad transfer")
+      {"GET", ["v1", "transfers", "555"]} -> json(conn, %{"id" => 555, "status" => Agent.get(state, & &1.status)})
+      {"PUT", ["v1", "transfers", "555", "cancel"]} -> Agent.update(state, &%{&1 | status: "cancelled"}) && json(conn, %{"status" => "cancelled"})
+      {"POST", ["v3", "profiles", _, "transfers", _, "payments"]} -> json(conn, %{"status" => "COMPLETED"})
+      _ -> send_resp(conn, 404, "")
+    end
+  end
+
+  defp json(conn, body), do: conn |> put_resp_content_type("application/json") |> send_resp(200, Jason.encode!(body))
+end
+#+end_src
+
+#+begin_src elixir :tangle ../pkgs/luna-core-ex/test/payments_test.exs
+defmodule LunaCore.PaymentsTest do
+  use ExUnit.Case, async: true
+
+  alias LunaCore.{Approvals, FakeWise, Payments}
+  alias LunaCore.Payments.PaymentError
+
+  @moduletag :tmp_dir
+  @today ~D[2026-11-23]
+
+  defp settings(mode) do
+    Payments.settings(Jason.encode!(%{"mode" => mode, "sandbox" => true, "maxPerPayment" => 100, "maxPerDay" => 150,
+      "payees" => %{"landlord" => %{"recipientId" => 42, "currency" => "AUD", "maxPerPayment" => 80}}}))
+  end
+
+  defp make(tmp, mode) do
+    fake = FakeWise.start()
+    {:ok, clock} = Agent.start_link(fn -> ~U[2026-11-23 09:00:00Z] end)
+    test = self()
+
+    cfg = %{settings: settings(mode), log: Path.join(tmp, "payments.jsonl"), audit: Path.join(tmp, "audit.jsonl"),
+            today: fn -> @today end, now: fn -> Agent.get(clock, & &1) end,
+            notify: fn text -> send(test, {:told, text}) end, wise: [token: "token", base_url: fake.url]}
+
+    %{cfg: cfg, fake: fake, clock: clock}
+  end
+
+  defp later(clock, hours), do: Agent.update(clock, &DateTime.add(&1, hours * 3600))
+
+  for {payee, amount, currency, message} <- [
+        {"stranger", "10", "AUD", "not on the allowlist"},
+        {"landlord", "10", "NZD", "takes AUD"},
+        {"landlord", "0", "AUD", "more than zero"},
+        {"landlord", "90", "AUD", "limit of AUD 80"},
+        {"landlord", "abc", "AUD", "not an amount"}
+      ] do
+    test "the control: #{message}", %{tmp_dir: tmp} do
+      %{cfg: cfg} = make(tmp, "draft")
+      assert_raise PaymentError, ~r/#{unquote(message)}/, fn ->
+        Payments.check(cfg.settings, cfg.log, unquote(payee), unquote(amount), unquote(currency), @today)
+      end
+    end
+  end
+
+  test "off refuses", %{tmp_dir: tmp} do
+    %{cfg: cfg} = make(tmp, "off")
+    assert_raise PaymentError, ~r/off/, fn -> Payments.check(cfg.settings, cfg.log, "landlord", "10", "AUD", @today) end
+  end
+
+  test "a bad mode is refused" do
+    assert_raise PaymentError, fn -> Payments.settings(~s({"mode": "yolo"})) end
+  end
+
+  test "a dry run calls nothing", %{tmp_dir: tmp} do
+    %{cfg: cfg, fake: fake} = make(tmp, "dry-run")
+    assert Payments.request(cfg, "landlord", "50", "AUD", "Rent", "k-1") =~ "Dry run"
+    assert FakeWise.calls(fake) == []
+  end
+
+  test "a draft makes a transfer and never funds it", %{tmp_dir: tmp} do
+    %{cfg: cfg, fake: fake} = make(tmp, "draft")
+    text = Payments.request(cfg, "landlord", "50", "AUD", "Rent", "k-1")
+    assert text =~ "Approve in the Wise app"
+    assert_received {:told, ^text}
+    calls = FakeWise.calls(fake)
+    assert {"POST", "/v1/transfers"} in calls
+    refute Enum.any?(calls, fn {_, path} -> String.ends_with?(path, "/payments") end)
+  end
+
+  test "drafts count toward the day limit", %{tmp_dir: tmp} do
+    %{cfg: cfg} = make(tmp, "draft")
+    Payments.request(cfg, "landlord", "80", "AUD", "Rent", "k-1")
+    assert_raise PaymentError, ~r/limit per day/, fn -> Payments.check(cfg.settings, cfg.log, "landlord", "80", "AUD", @today) end
+  end
+
+  test "the watch reports the funding", %{tmp_dir: tmp} do
+    %{cfg: cfg, fake: fake} = make(tmp, "draft")
+    Payments.request(cfg, "landlord", "50", "AUD", "Rent", "k-1")
+    assert_received {:told, _}
+    FakeWise.set_status(fake, "processing")
+    Payments.watch_once(cfg)
+    assert_received {:told, "You approved" <> _}
+    assert Payments.latest(cfg.log)["k-1"]["status"] == "funded"
+    Payments.watch_once(cfg)
+    refute_received {:told, _}
+  end
+
+  test "the watch cancels after 24 hours", %{tmp_dir: tmp} do
+    %{cfg: cfg, fake: fake, clock: clock} = make(tmp, "draft")
+    Payments.request(cfg, "landlord", "50", "AUD", "Rent", "k-1")
+    later(clock, 23)
+    Payments.watch_once(cfg)
+    refute {"PUT", "/v1/transfers/555/cancel"} in FakeWise.calls(fake)
+    later(clock, 2)
+    Payments.watch_once(cfg)
+    assert {"PUT", "/v1/transfers/555/cancel"} in FakeWise.calls(fake)
+    assert_received {:told, "LUNA cancelled" <> _}
+    assert Decimal.eq?(Payments.total_for(cfg.log, @today, "AUD"), 0)
+  end
+
+  test "the watch sees a cancel in the app", %{tmp_dir: tmp} do
+    %{cfg: cfg, fake: fake} = make(tmp, "draft")
+    Payments.request(cfg, "landlord", "50", "AUD", "Rent", "k-1")
+    FakeWise.set_status(fake, "cancelled")
+    Payments.watch_once(cfg)
+    assert_received {:told, "You cancelled" <> _}
+  end
+
+  test "auto mode needs an approval in Matrix", %{tmp_dir: tmp} do
+    %{cfg: cfg, fake: fake} = make(tmp, "auto")
+    dir = Path.join(tmp, "approvals")
+    File.mkdir_p!(dir)
+    {:ok, approvals} = Approvals.start_link(dir: dir, audit: cfg.audit, name: nil)
+    [tool] = Payments.tools(cfg, approvals)
+
+    assert {:ok, "Approval request " <> _} =
+             tool.run.(%{"payee" => "landlord", "amount" => "50", "currency" => "AUD", "reference" => "Rent", "reason" => "Rent"}, %{taint: nil})
+
+    assert FakeWise.calls(fake) == []
+    [item] = Approvals.pending(approvals)
+    assert Approvals.approve(approvals, item.id) =~ "Sent AUD 50.00"
+    assert {"POST", "/v3/profiles/7/transfers/555/payments"} in FakeWise.calls(fake)
+  end
+
+  test "the tool refuses a payment over the limit, and no request goes to Matrix", %{tmp_dir: tmp} do
+    %{cfg: cfg, fake: fake} = make(tmp, "auto")
+    dir = Path.join(tmp, "approvals")
+    File.mkdir_p!(dir)
+    {:ok, approvals} = Approvals.start_link(dir: dir, audit: cfg.audit, name: nil)
+    [tool] = Payments.tools(cfg, approvals)
+    assert {:ok, "Refused: " <> _} = tool.run.(%{"payee" => "landlord", "amount" => "500", "currency" => "AUD", "reference" => "x", "reason" => "x"}, %{taint: nil})
+    assert Approvals.pending(approvals) == []
+    assert FakeWise.calls(fake) == []
+  end
+
+  test "the reference is cleaned" do
+    assert Payments.clean_reference("Rent; DROP TABLE <x> 2026-11") == "Rent DROP TABLE x"
+  end
+
+  test "the payment key is a version 4 UUID" do
+    assert Payments.payment_key() =~ ~r/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
   end
 end
 #+end_src

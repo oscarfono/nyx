@@ -22,7 +22,10 @@ defmodule LunaCore.MixProject do
   defp deps do
     [
       {:bandit, "~> 1.15"},
+      # 3.1.2 and later fix EEF-CVE-2026-32686 and EEF-CVE-2026-97853.
+      {:decimal, "~> 3.2"},
       {:jason, "~> 1.4"},
+      {:nimble_csv, "~> 1.2"},
       {:plug, "~> 1.18"},
       {:req, "~> 0.7"},
       {:tz, "~> 0.28"}
