@@ -1,15 +1,13 @@
 import asyncio
 import base64
+import stat
 
+import aiohttp
 from aiohttp.test_utils import TestClient, TestServer
 
 from luna_core.approvals import Approvals
 from luna_core.audit import AuditLog
-from luna_core.web import WebApp
-
-OWNER = "cooper@oscarfono.com"
-ORIGIN = "https://luna.example.ts.net:8443"
-GOOD = {"Tailscale-User-Login": OWNER, "Origin": ORIGIN, "X-Luna": "1"}
+from luna_core.web import WebApp, serve
 
 
 class FakeAgent:
@@ -37,7 +35,7 @@ def make(tmp_path):
 
     approvals.register("test", executor)
     agent = FakeAgent()
-    return WebApp(agent, approvals, audit, OWNER, ORIGIN), agent, approvals, calls
+    return WebApp(agent, approvals, audit), agent, approvals, calls
 
 
 def run(webapp, scenario):
@@ -47,38 +45,18 @@ def run(webapp, scenario):
     return asyncio.run(go())
 
 
-def test_no_login_is_refused(tmp_path):
+def test_history(tmp_path):
     webapp, *_ = make(tmp_path)
     async def scenario(client):
-        return (await client.get("/")).status, (await client.get("/", headers={"Tailscale-User-Login": "x@y"})).status
-    assert run(webapp, scenario) == (403, 403)
-
-
-def test_owner_gets_the_page_with_a_strict_policy(tmp_path):
-    webapp, *_ = make(tmp_path)
-    async def scenario(client):
-        response = await client.get("/", headers={"Tailscale-User-Login": OWNER})
-        return response.status, response.headers["Content-Security-Policy"], await response.text()
-    status, csp, text = run(webapp, scenario)
-    assert status == 200 and "script-src 'self'" in csp and "<title>LUNA</title>" in text
-
-
-def test_post_needs_origin_and_header(tmp_path):
-    webapp, agent, *_ = make(tmp_path)
-    async def scenario(client):
-        bad = await client.post("/api/chat", json={"text": "x"}, headers={"Tailscale-User-Login": OWNER})
-        other = await client.post("/api/chat", json={"text": "x"},
-                                  headers={**GOOD, "Origin": "https://evil.example"})
-        return bad.status, other.status
-    assert run(webapp, scenario) == (403, 403)
-    assert agent.asked == []
+        return await (await client.get("/api/history")).json()
+    assert run(webapp, scenario)["messages"][1] == {"role": "assistant", "text": "hi"}
 
 
 def test_chat_with_an_image(tmp_path):
     webapp, agent, *_ = make(tmp_path)
     data = base64.b64encode(b"\xff\xd8fake-jpeg").decode()
     async def scenario(client):
-        response = await client.post("/api/chat", headers=GOOD,
+        response = await client.post("/api/chat",
                                      json={"text": "what is this?", "image": {"media_type": "image/jpeg", "data": data}})
         return response.status, await response.json()
     status, body = run(webapp, scenario)
@@ -89,19 +67,19 @@ def test_chat_with_an_image(tmp_path):
 def test_bad_image_is_refused(tmp_path):
     webapp, agent, *_ = make(tmp_path)
     async def scenario(client):
-        a = await client.post("/api/chat", headers=GOOD, json={"text": "x", "image": {"media_type": "image/gif", "data": "AA=="}})
-        b = await client.post("/api/chat", headers=GOOD, json={"text": "x", "image": {"media_type": "image/png", "data": "not base64!"}})
+        a = await client.post("/api/chat", json={"text": "x", "image": {"media_type": "image/gif", "data": "AA=="}})
+        b = await client.post("/api/chat", json={"text": "x", "image": {"media_type": "image/png", "data": "not base64!"}})
         return a.status, b.status
     assert run(webapp, scenario) == (400, 400)
     assert agent.asked == []
 
 
-def test_approve_from_the_page(tmp_path):
+def test_approve(tmp_path):
     webapp, _, approvals, calls = make(tmp_path)
     item = asyncio.run(approvals.request("test", {"x": 1}, "Test payment"))
     async def scenario(client):
-        listed = await (await client.get("/api/approvals", headers=GOOD)).json()
-        result = await (await client.post(f"/api/approvals/{item.id}/approve", headers=GOOD, json={})).json()
+        listed = await (await client.get("/api/approvals")).json()
+        result = await (await client.post(f"/api/approvals/{item.id}/approve", json={})).json()
         return listed, result
     listed, result = run(webapp, scenario)
     assert listed["approvals"][0]["summary"] == "Test payment"
@@ -111,13 +89,27 @@ def test_approve_from_the_page(tmp_path):
 def test_money_is_off_by_default(tmp_path):
     webapp, *_ = make(tmp_path)
     async def scenario(client):
-        return await (await client.get("/api/money", headers=GOOD)).json()
+        return await (await client.get("/api/money")).json()
     assert "Money is off" in run(webapp, scenario)["text"]
 
 
-def test_system_panel(tmp_path):
+def test_system(tmp_path):
     webapp, *_ = make(tmp_path)
     async def scenario(client):
-        return await (await client.get("/api/system", headers=GOOD)).json()
+        return await (await client.get("/api/system")).json()
     data = run(webapp, scenario)
     assert data["pending_approvals"] == 0 and "update" in data
+
+
+def test_serve_on_a_unix_socket(tmp_path):
+    webapp, *_ = make(tmp_path)
+    path = tmp_path / "api.sock"
+    path.write_text("an old socket")
+    async def go():
+        await serve(webapp, path)
+        connector = aiohttp.UnixConnector(path=str(path))
+        async with aiohttp.ClientSession(connector=connector) as session:
+            async with session.get("http://core/api/money") as response:
+                return await response.json()
+    assert "Money is off" in asyncio.run(go())["text"]
+    assert stat.S_ISSOCK(path.stat().st_mode)

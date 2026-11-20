@@ -38,13 +38,18 @@ in
   users.users.${user} = {
     isSystemUser = true;
     group = user;
+    # The only client of the core API. Refer to "Build: the core API".
+    extraGroups = [ "luna-api" ];
     home = stateDir;
   };
+  # core.nix makes this group too. A test of this module alone needs it here.
+  users.groups.luna-api = { };
 
   systemd.services.luna-web = {
     description = "LUNA web app (Phoenix)";
     # postgresql.target includes postgresql-setup, which makes the role.
-    after = [ "network.target" "postgresql.target" ];
+    # The page works without the core, and shows a notice for each panel.
+    after = [ "network.target" "postgresql.target" "luna-core.service" ];
     requires = [ "postgresql.target" ];
     wantedBy = [ "multi-user.target" ];
     environment = {
@@ -52,6 +57,7 @@ in
       LUNA_WEB_ORIGIN = "https://${fqdn}:8443";
       LUNA_WEB_PORT = "8091";
       LUNA_WEB_SECRET_FILE = "${stateDir}/secret_key_base";
+      LUNA_CORE_SOCKET = "/run/luna-api/api.sock";
       LUNA_DB_SOCKET_DIR = "/run/postgresql";
       LUNA_DB_USER = user;
       LUNA_DB_NAME = user;

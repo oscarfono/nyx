@@ -57,14 +57,13 @@ async def run() -> None:
     if wise.mode == "draft":
         payments.notify = bot.send_owner
         watchers.append(payments_loop(payments, audit))
-    if config.owner_login and config.web_origin:
-        webapp = WebApp(
-            chat_agent, approvals, audit, config.owner_login, config.web_origin, money=money,
-            settings={"model": config.model, "money": config.money_enabled, "wise_mode": wise.mode,
-                      "wise_sandbox": wise.sandbox},
-            memory_root=config.memory_dir,
-        )
-        await serve(webapp, config.web_port)
+    webapp = WebApp(
+        chat_agent, approvals, audit, money=money,
+        settings={"model": config.model, "money": config.money_enabled, "wise_mode": wise.mode,
+                  "wise_sandbox": wise.sandbox},
+        memory_root=config.memory_dir,
+    )
+    await serve(webapp, config.api_socket)
     hour, minute = (int(part) for part in config.brief_time.split(":"))
     audit.write("luna.start", model=config.model)
     await asyncio.gather(

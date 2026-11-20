@@ -60,8 +60,8 @@ in
       ${config.services.tailscale.package}/bin/tailscale serve --bg --https=443 http://127.0.0.1:8008
       # The Phoenix app. Refer to "Build: the Phoenix app".
       ${config.services.tailscale.package}/bin/tailscale serve --bg --https=8443 http://127.0.0.1:8091
-      # The Python app, until stage E2. Refer to "Ports during the move".
-      ${config.services.tailscale.package}/bin/tailscale serve --bg --https=8444 http://127.0.0.1:8090
+      # Stage E1 used port 8444 for the Python app. Delete that serve rule.
+      ${config.services.tailscale.package}/bin/tailscale serve --https=8444 off || true
     '';
   };
 

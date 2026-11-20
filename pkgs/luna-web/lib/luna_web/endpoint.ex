@@ -14,7 +14,8 @@ defmodule LunaWeb.Endpoint do
   # Phoenix dispatches the socket before the plugs below.
   # LunaWeb.Owner.on_mount/4 checks the owner. check_origin checks the origin.
   socket "/live", Phoenix.LiveView.Socket,
-    websocket: [connect_info: [session: @session_options]],
+    # A camera frame is 5 MB or less, and base64 makes it 4/3 larger.
+    websocket: [connect_info: [session: @session_options], max_frame_size: 8_000_000],
     longpoll: false
 
   plug Plug.RequestId

@@ -94,6 +94,8 @@ let
 in
 {
   users.groups.luna = { };
+  # The clients of the core API. Refer to "Build: the core API".
+  users.groups.luna-api = { };
   users.users.luna = {
     isSystemUser = true;
     group = "luna";
@@ -144,17 +146,20 @@ in
       LUNA_EFFORT = "medium";
       LUNA_MONEY = if site.money then "1" else "0";
       LUNA_WISE = builtins.toJSON site.wise;
-      LUNA_OWNER_LOGIN = site.ownerLogin;
-      # Port 8444 until stage E2. Refer to "Ports during the move".
-      LUNA_WEB_ORIGIN = "https://${fqdn}:8444";
-      LUNA_WEB_PORT = "8090";
+      # The core API. Refer to "Build: the core API".
+      LUNA_API_SOCKET = "/run/luna-api/api.sock";
       GIT_AUTHOR_NAME = "LUNA";
       GIT_AUTHOR_EMAIL = "luna@${fqdn}";
       GIT_COMMITTER_NAME = "LUNA";
       GIT_COMMITTER_EMAIL = "luna@${fqdn}";
     };
     serviceConfig = {
-      ExecStartPre = memoryInit;
+      ExecStartPre = [
+        # "+" runs this command as root, outside the sandbox. The setgid bit
+        # gives the socket the group luna-api. Refer to "Access".
+        "+${pkgs.coreutils}/bin/install -d -m 2750 -o luna -g luna-api /run/luna-api"
+        memoryInit
+      ];
       ExecStart = "${luna-core}/bin/luna-core";
       User = "luna";
       Group = "luna";
@@ -168,7 +173,7 @@ in
       RestartSteps = 5;
       RestartMaxDelaySec = 600;
 
-      ReadWritePaths = [ stateDir ];
+      ReadWritePaths = [ stateDir "/run/luna-api" ];
       ProtectSystem = "strict";
       ProtectHome = true;
       PrivateTmp = true;

@@ -13,6 +13,7 @@ if config_env() == :prod do
   uri = URI.parse(origin)
 
   config :luna_web, :owner_login, env.("LUNA_OWNER_LOGIN")
+  config :luna_web, :core_socket, env.("LUNA_CORE_SOCKET")
 
   config :luna_web, LunaWeb.Endpoint,
     server: true,

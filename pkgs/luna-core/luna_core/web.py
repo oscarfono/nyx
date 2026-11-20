@@ -1,4 +1,7 @@
-"""The LUNA web app: chat, approvals, money and system. Tailnet only."""
+"""The core API: chat, approvals, money and system, on a unix socket.
+
+The Phoenix app is the only client. Refer to "Build: the core API" in LUNA.org.
+"""
 
 from __future__ import annotations
 
@@ -7,6 +10,7 @@ import binascii
 import json
 import subprocess
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from aiohttp import web
@@ -14,36 +18,25 @@ from aiohttp import web
 from .approvals import Approvals
 from .audit import AuditLog
 from .sysinfo import update_notice
-from .web_page import APP_CSS, APP_JS, INDEX_HTML
 
-LOGIN_HEADER = "Tailscale-User-Login"
 IMAGE_TYPES = frozenset({"image/jpeg", "image/png", "image/webp"})
 MAX_IMAGE_BYTES = 5 * 1024 * 1024
-CSP = (
-    "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; "
-    "media-src 'self' blob:; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
-)
 
 
 class WebApp:
-    def __init__(self, agent: Any, approvals: Approvals, audit: AuditLog, owner_login: str, origin: str,
+    def __init__(self, agent: Any, approvals: Approvals, audit: AuditLog,
                  money: Any = None, settings: dict[str, Any] | None = None, memory_root: Any = None) -> None:
         self.agent = agent
         self.approvals = approvals
         self.audit = audit
-        self.owner_login = owner_login
-        self.origin = origin
         self.money = money
         self.settings = settings or {}
         self.memory_root = memory_root
         self.started = datetime.now(UTC)
 
     def app(self) -> web.Application:
-        app = web.Application(middlewares=[self.guard], client_max_size=8 * 1024 * 1024)
+        app = web.Application(client_max_size=8 * 1024 * 1024)
         app.add_routes([
-            web.get("/", self.index),
-            web.get("/app.js", self.script),
-            web.get("/app.css", self.style),
             web.get("/api/history", self.history),
             web.post("/api/chat", self.chat),
             web.get("/api/approvals", self.list_approvals),
@@ -52,32 +45,6 @@ class WebApp:
             web.get("/api/system", self.system),
         ])
         return app
-
-    @web.middleware
-    async def guard(self, request: web.Request, handler: Any) -> web.StreamResponse:
-        login = request.headers.get(LOGIN_HEADER)
-        if login != self.owner_login:
-            self.audit.write("web.refused", reason="login", path=request.path)
-            return web.Response(status=403, text="LUNA: this page is for the owner only.")
-        if request.method != "GET":
-            if request.headers.get("Origin") != self.origin or request.headers.get("X-Luna") != "1":
-                self.audit.write("web.refused", reason="origin", path=request.path)
-                return web.Response(status=403, text="LUNA: the request has no valid origin.")
-        response = await handler(request)
-        response.headers["Content-Security-Policy"] = CSP
-        response.headers["X-Content-Type-Options"] = "nosniff"
-        response.headers["Referrer-Policy"] = "no-referrer"
-        response.headers["Cache-Control"] = "no-store"
-        return response
-
-    async def index(self, _: web.Request) -> web.Response:
-        return web.Response(text=INDEX_HTML, content_type="text/html")
-
-    async def script(self, _: web.Request) -> web.Response:
-        return web.Response(text=APP_JS, content_type="application/javascript")
-
-    async def style(self, _: web.Request) -> web.Response:
-        return web.Response(text=APP_CSS, content_type="text/css")
 
     async def history(self, _: web.Request) -> web.Response:
         return web.json_response({"messages": self.agent.transcript()})
@@ -150,10 +117,12 @@ class WebApp:
         })
 
 
-async def serve(webapp: WebApp, port: int) -> None:
-    """Run the web app on 127.0.0.1 until the process stops."""
+async def serve(webapp: WebApp, path: Path) -> None:
+    """Run the core API on the unix socket at path until the process stops."""
     runner = web.AppRunner(webapp.app(), access_log=None)
     await runner.setup()
-    site = web.TCPSite(runner, "127.0.0.1", port)
+    # A socket from an earlier run stops the bind.
+    path.unlink(missing_ok=True)
+    site = web.UnixSite(runner, str(path))
     await site.start()
-    webapp.audit.write("web.ready", port=port)
+    webapp.audit.write("api.ready", path=str(path))

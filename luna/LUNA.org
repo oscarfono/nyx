@@ -417,8 +417,8 @@ The Python core stays until the new core passes the same tests.
 | E4    | Task view (plan, tool calls, results) and fixed widgets                   | The core streams events to the page |
 | E5    | Port the core. Port the tests first.                                       | All core tests pass. Python retires. |
 
-The build of E1 is in [[*Build: the Phoenix app][Build: the Phoenix app]].
-E1 is done when the page loads on luna with the Tailscale login.
+The build of E1 and E2 is in [[*Build: the Phoenix app][Build: the Phoenix app]].
+The contract between the page and the core is in [[*Build: the core API][Build: the core API]].
 
 ** Feature backlog
 
@@ -956,8 +956,8 @@ in
       ${config.services.tailscale.package}/bin/tailscale serve --bg --https=443 http://127.0.0.1:8008
       # The Phoenix app. Refer to "Build: the Phoenix app".
       ${config.services.tailscale.package}/bin/tailscale serve --bg --https=8443 http://127.0.0.1:8091
-      # The Python app, until stage E2. Refer to "Ports during the move".
-      ${config.services.tailscale.package}/bin/tailscale serve --bg --https=8444 http://127.0.0.1:8090
+      # Stage E1 used port 8444 for the Python app. Delete that serve rule.
+      ${config.services.tailscale.package}/bin/tailscale serve --https=8444 off || true
     '';
   };
 
@@ -1073,6 +1073,8 @@ let
 in
 {
   users.groups.luna = { };
+  # The clients of the core API. Refer to "Build: the core API".
+  users.groups.luna-api = { };
   users.users.luna = {
     isSystemUser = true;
     group = "luna";
@@ -1123,17 +1125,20 @@ in
       LUNA_EFFORT = "medium";
       LUNA_MONEY = if site.money then "1" else "0";
       LUNA_WISE = builtins.toJSON site.wise;
-      LUNA_OWNER_LOGIN = site.ownerLogin;
-      # Port 8444 until stage E2. Refer to "Ports during the move".
-      LUNA_WEB_ORIGIN = "https://${fqdn}:8444";
-      LUNA_WEB_PORT = "8090";
+      # The core API. Refer to "Build: the core API".
+      LUNA_API_SOCKET = "/run/luna-api/api.sock";
       GIT_AUTHOR_NAME = "LUNA";
       GIT_AUTHOR_EMAIL = "luna@${fqdn}";
       GIT_COMMITTER_NAME = "LUNA";
       GIT_COMMITTER_EMAIL = "luna@${fqdn}";
     };
     serviceConfig = {
-      ExecStartPre = memoryInit;
+      ExecStartPre = [
+        # "+" runs this command as root, outside the sandbox. The setgid bit
+        # gives the socket the group luna-api. Refer to "Access".
+        "+${pkgs.coreutils}/bin/install -d -m 2750 -o luna -g luna-api /run/luna-api"
+        memoryInit
+      ];
       ExecStart = "${luna-core}/bin/luna-core";
       User = "luna";
       Group = "luna";
@@ -1147,7 +1152,7 @@ in
       RestartSteps = 5;
       RestartMaxDelaySec = 600;
 
-      ReadWritePaths = [ stateDir ];
+      ReadWritePaths = [ stateDir "/run/luna-api" ];
       ProtectSystem = "strict";
       ProtectHome = true;
       PrivateTmp = true;
@@ -1275,9 +1280,7 @@ class Config:
     telegram_token: str | None
     telegram_chat_id: str | None
     money_enabled: bool = False
-    owner_login: str = ""
-    web_origin: str = ""
-    web_port: int = 8090
+    api_socket: Path = Path("/run/luna-api/api.sock")
     wise_json: str = '{"mode": "off"}'
     wise_token: str | None = None
 
@@ -1314,9 +1317,7 @@ def load() -> Config:
         telegram_token=_credential("telegram_token"),
         telegram_chat_id=_credential("telegram_chat_id"),
         money_enabled=env("LUNA_MONEY", "0") == "1",
-        owner_login=env("LUNA_OWNER_LOGIN", ""),
-        web_origin=env("LUNA_WEB_ORIGIN", ""),
-        web_port=int(env("LUNA_WEB_PORT", "8090")),
+        api_socket=Path(env("LUNA_API_SOCKET", "/run/luna-api/api.sock")),
         wise_json=env("LUNA_WISE", '{"mode": "off"}'),
         wise_token=_credential("wise_api_token"),
     )
@@ -2395,14 +2396,13 @@ async def run() -> None:
     if wise.mode == "draft":
         payments.notify = bot.send_owner
         watchers.append(payments_loop(payments, audit))
-    if config.owner_login and config.web_origin:
-        webapp = WebApp(
-            chat_agent, approvals, audit, config.owner_login, config.web_origin, money=money,
-            settings={"model": config.model, "money": config.money_enabled, "wise_mode": wise.mode,
-                      "wise_sandbox": wise.sandbox},
-            memory_root=config.memory_dir,
-        )
-        await serve(webapp, config.web_port)
+    webapp = WebApp(
+        chat_agent, approvals, audit, money=money,
+        settings={"model": config.model, "money": config.money_enabled, "wise_mode": wise.mode,
+                  "wise_sandbox": wise.sandbox},
+        memory_root=config.memory_dir,
+    )
+    await serve(webapp, config.api_socket)
     hour, minute = (int(part) for part in config.brief_time.split(":"))
     audit.write("luna.start", model=config.model)
     await asyncio.gather(
@@ -4113,44 +4113,48 @@ def test_reference_is_cleaned():
     assert clean_reference("Rent; DROP TABLE <x> 2026-11") == "Rent DROP TABLE x"
 #+end_src
 
-* Build: the web app
+* Build: the core API
 
-This is the Python web app.
-The web app is at =https://luna.<tailnet>:8444= until stage E2.
-The Phoenix app has port 8443. Refer to [[*Ports during the move][Ports during the move]].
-=tailscale serve= publishes the app on the tailnet only.
-The app has four panels: Chat, Approvals, Money and System.
-Chat accepts a camera image with a message.
+The core API is the contract between the Phoenix app and the core.
+The Python core serves the core API until stage E5.
+The Elixir core serves the same contract after E5, so the Phoenix app does not change.
+Do not add features to the Python side. Add each new feature to the contract first.
 
-** Login
+** Contract
 
-You do not type a password.
-=tailscale serve= adds the header =Tailscale-User-Login= to each request from a tailnet user.
-The app accepts a request only when the header is the owner login in the site values.
-The app listens on =127.0.0.1= only, so a request from outside luna cannot set the header.
+The core API is JSON over HTTP on the unix socket =/run/luna-api/api.sock=.
 
-Each request that changes something must also have:
-- the header =Origin= with the address of the app, and
-- the header =X-Luna: 1=.
-A page on another site cannot send these headers, so cross-site requests fail.
+| Request                           | Body                      | Reply                                    |
+|-----------------------------------+---------------------------+------------------------------------------|
+| =GET /api/history=                |                           | ={"messages": [{"role", "text"}]}=       |
+| =POST /api/chat=                  | ={"text", "image"?}=      | ={"reply"}=                              |
+| =GET /api/approvals=              |                           | ={"approvals": [{"id", "summary", "created"}]}= |
+| =POST /api/approvals/{id}/{action}= | ={}=, action is =approve= or =deny= | ={"result"}=                   |
+| =GET /api/money=                  |                           | ={"text"}=                               |
+| =GET /api/system=                 |                           | ={"started", "update", "memory", "settings", "pending_approvals", "events"}= |
 
-** Camera
+=image= is ={"media_type", "data"}=. =data= is base64.
+LUNA accepts JPEG, PNG or WebP, to 5 MB.
+An error reply has the status 400 and ={"error"}=.
 
-The browser lists each camera that is connected to the computer.
-"Show LUNA" takes one frame, and makes the frame 1280 pixels wide or less.
-The frame goes with the next message to the Claude API.
-LUNA does not keep the image on luna.
+** Access
 
-** Safety of the page
+The core API has no login check. The file permissions are the access control.
+The directory =/run/luna-api= has the mode 2750, the owner =luna= and the group =luna-api=.
+The setgid bit gives the socket the group =luna-api=.
+The umask of the core gives the socket the mode 0770.
+The system user =luna_web= is the only member of =luna-api=.
 
-The page shows each reply as plain text, not as HTML.
-A reply cannot run a script in the page, even if a web page told the model to write one.
-The Content-Security-Policy allows scripts from the app only.
+Thus only the core and the Phoenix app can open the socket.
+A different local process cannot send a question to the agent, or approve a request.
 
-** Web server
+** Server
 
 #+begin_src python :tangle ../pkgs/luna-core/luna_core/web.py
-"""The LUNA web app: chat, approvals, money and system. Tailnet only."""
+"""The core API: chat, approvals, money and system, on a unix socket.
+
+The Phoenix app is the only client. Refer to "Build: the core API" in LUNA.org.
+"""
 
 from __future__ import annotations
 
@@ -4159,6 +4163,7 @@ import binascii
 import json
 import subprocess
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from aiohttp import web
@@ -4166,36 +4171,25 @@ from aiohttp import web
 from .approvals import Approvals
 from .audit import AuditLog
 from .sysinfo import update_notice
-from .web_page import APP_CSS, APP_JS, INDEX_HTML
 
-LOGIN_HEADER = "Tailscale-User-Login"
 IMAGE_TYPES = frozenset({"image/jpeg", "image/png", "image/webp"})
 MAX_IMAGE_BYTES = 5 * 1024 * 1024
-CSP = (
-    "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; "
-    "media-src 'self' blob:; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
-)
 
 
 class WebApp:
-    def __init__(self, agent: Any, approvals: Approvals, audit: AuditLog, owner_login: str, origin: str,
+    def __init__(self, agent: Any, approvals: Approvals, audit: AuditLog,
                  money: Any = None, settings: dict[str, Any] | None = None, memory_root: Any = None) -> None:
         self.agent = agent
         self.approvals = approvals
         self.audit = audit
-        self.owner_login = owner_login
-        self.origin = origin
         self.money = money
         self.settings = settings or {}
         self.memory_root = memory_root
         self.started = datetime.now(UTC)
 
     def app(self) -> web.Application:
-        app = web.Application(middlewares=[self.guard], client_max_size=8 * 1024 * 1024)
+        app = web.Application(client_max_size=8 * 1024 * 1024)
         app.add_routes([
-            web.get("/", self.index),
-            web.get("/app.js", self.script),
-            web.get("/app.css", self.style),
             web.get("/api/history", self.history),
             web.post("/api/chat", self.chat),
             web.get("/api/approvals", self.list_approvals),
@@ -4204,32 +4198,6 @@ class WebApp:
             web.get("/api/system", self.system),
         ])
         return app
-
-    @web.middleware
-    async def guard(self, request: web.Request, handler: Any) -> web.StreamResponse:
-        login = request.headers.get(LOGIN_HEADER)
-        if login != self.owner_login:
-            self.audit.write("web.refused", reason="login", path=request.path)
-            return web.Response(status=403, text="LUNA: this page is for the owner only.")
-        if request.method != "GET":
-            if request.headers.get("Origin") != self.origin or request.headers.get("X-Luna") != "1":
-                self.audit.write("web.refused", reason="origin", path=request.path)
-                return web.Response(status=403, text="LUNA: the request has no valid origin.")
-        response = await handler(request)
-        response.headers["Content-Security-Policy"] = CSP
-        response.headers["X-Content-Type-Options"] = "nosniff"
-        response.headers["Referrer-Policy"] = "no-referrer"
-        response.headers["Cache-Control"] = "no-store"
-        return response
-
-    async def index(self, _: web.Request) -> web.Response:
-        return web.Response(text=INDEX_HTML, content_type="text/html")
-
-    async def script(self, _: web.Request) -> web.Response:
-        return web.Response(text=APP_JS, content_type="application/javascript")
-
-    async def style(self, _: web.Request) -> web.Response:
-        return web.Response(text=APP_CSS, content_type="text/css")
 
     async def history(self, _: web.Request) -> web.Response:
         return web.json_response({"messages": self.agent.transcript()})
@@ -4302,302 +4270,33 @@ class WebApp:
         })
 
 
-async def serve(webapp: WebApp, port: int) -> None:
-    """Run the web app on 127.0.0.1 until the process stops."""
+async def serve(webapp: WebApp, path: Path) -> None:
+    """Run the core API on the unix socket at path until the process stops."""
     runner = web.AppRunner(webapp.app(), access_log=None)
     await runner.setup()
-    site = web.TCPSite(runner, "127.0.0.1", port)
+    # A socket from an earlier run stops the bind.
+    path.unlink(missing_ok=True)
+    site = web.UnixSite(runner, str(path))
     await site.start()
-    webapp.audit.write("web.ready", port=port)
+    webapp.audit.write("api.ready", path=str(path))
 #+end_src
 
-** Web page
+** Core API tests
 
-The page has no external files. The browser loads nothing from the internet.
-
-#+begin_src python :tangle ../pkgs/luna-core/luna_core/web_page.py
-"""The page, the script and the style of the LUNA web app."""
-
-INDEX_HTML = """<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>LUNA</title>
-<link rel="stylesheet" href="/app.css">
-<script src="/app.js" defer></script>
-</head>
-<body>
-<header>
-  <h1>LUNA</h1>
-  <nav>
-    <button data-panel="chat" class="active">Chat</button>
-    <button data-panel="approvals">Approvals <span id="approval-count"></span></button>
-    <button data-panel="money">Money</button>
-    <button data-panel="system">System</button>
-  </nav>
-</header>
-<main>
-  <section id="chat" class="panel active">
-    <div id="messages" aria-live="polite"></div>
-    <div id="camera" hidden>
-      <video id="video" autoplay playsinline muted></video>
-      <div class="row">
-        <select id="camera-list" aria-label="Camera"></select>
-        <button id="snap">Show LUNA</button>
-        <button id="camera-close">Close camera</button>
-      </div>
-    </div>
-    <div id="attachment" hidden><img id="preview" alt="Image for LUNA"><button id="drop">Remove image</button></div>
-    <form id="composer">
-      <button type="button" id="camera-open" title="Camera">Camera</button>
-      <textarea id="input" rows="2" placeholder="Message LUNA. Enter sends, Shift+Enter is a new line."></textarea>
-      <button id="send" type="submit">Send</button>
-    </form>
-  </section>
-  <section id="approvals" class="panel"><div id="approval-list"></div></section>
-  <section id="money" class="panel"><pre id="money-text"></pre></section>
-  <section id="system" class="panel"><div id="system-info"></div></section>
-</main>
-</body>
-</html>
-"""
-
-APP_CSS = """
-:root { --bg: #0e1116; --panel: #161b22; --text: #e6edf3; --muted: #8b949e; --accent: #b392f0; --mine: #1f2937; }
-@media (prefers-color-scheme: light) {
-  :root { --bg: #f6f8fa; --panel: #ffffff; --text: #1f2328; --muted: #57606a; --accent: #6f42c1; --mine: #eef1f5; }
-}
-,* { box-sizing: border-box; }
-body { margin: 0; font: 16px/1.5 system-ui, sans-serif; background: var(--bg); color: var(--text); }
-header { display: flex; align-items: center; justify-content: space-between; padding: 8px 16px;
-         background: var(--panel); border-bottom: 1px solid #30363d; flex-wrap: wrap; gap: 8px; }
-h1 { margin: 0; font-size: 20px; letter-spacing: 4px; color: var(--accent); }
-nav button, button { background: none; border: 1px solid #30363d; color: var(--text); padding: 6px 12px;
-                     border-radius: 6px; cursor: pointer; font: inherit; }
-nav button.active { border-color: var(--accent); color: var(--accent); }
-main { max-width: 900px; margin: 0 auto; padding: 16px; }
-.panel { display: none; } .panel.active { display: block; }
-#messages { display: flex; flex-direction: column; gap: 10px; min-height: 50vh; margin-bottom: 12px; }
-.msg { padding: 10px 14px; border-radius: 10px; white-space: pre-wrap; word-wrap: break-word; max-width: 90%; }
-.msg.user { align-self: flex-end; background: var(--mine); }
-.msg.assistant { align-self: flex-start; background: var(--panel); border: 1px solid #30363d; }
-.msg.wait { color: var(--muted); font-style: italic; }
-#composer { display: flex; gap: 8px; align-items: flex-end; }
-textarea { flex: 1; resize: vertical; background: var(--panel); color: var(--text); border: 1px solid #30363d;
-           border-radius: 6px; padding: 8px; font: inherit; }
-#camera video { width: 100%; max-height: 50vh; background: #000; border-radius: 8px; }
-.row { display: flex; gap: 8px; margin: 8px 0; flex-wrap: wrap; }
-#attachment img { max-height: 120px; border-radius: 6px; display: block; margin-bottom: 6px; }
-.card { background: var(--panel); border: 1px solid #30363d; border-radius: 8px; padding: 12px; margin-bottom: 10px;
-        white-space: pre-wrap; }
-pre { background: var(--panel); padding: 12px; border-radius: 8px; white-space: pre-wrap; }
-table { border-collapse: collapse; width: 100%; } td { padding: 4px 8px; border-bottom: 1px solid #30363d; }
-.muted { color: var(--muted); }
-"""
-
-APP_JS = r"""
-"use strict";
-const $ = (id) => document.getElementById(id);
-let image = null;
-let stream = null;
-
-async function api(path, options = {}) {
-  const init = { ...options, headers: { "Content-Type": "application/json", "X-Luna": "1", ...(options.headers || {}) } };
-  const response = await fetch(path, init);
-  const data = await response.json().catch(() => ({ error: response.statusText }));
-  if (!response.ok) throw new Error(data.error || response.statusText);
-  return data;
-}
-
-function element(tag, cls, text) {
-  const node = document.createElement(tag);
-  if (cls) node.className = cls;
-  if (text !== undefined) node.textContent = text;
-  return node;
-}
-
-function addMessage(role, text) {
-  const node = element("div", "msg " + role, text);
-  $("messages").appendChild(node);
-  node.scrollIntoView({ behavior: "smooth", block: "end" });
-  return node;
-}
-
-async function loadHistory() {
-  const data = await api("/api/history");
-  $("messages").replaceChildren();
-  for (const m of data.messages) addMessage(m.role, m.text);
-}
-
-async function send(event) {
-  event.preventDefault();
-  const text = $("input").value.trim();
-  if (!text && !image) return;
-  addMessage("user", text + (image ? "\n[image]" : ""));
-  const body = { text };
-  if (image) body.image = image;
-  $("input").value = "";
-  clearImage();
-  const waiting = addMessage("assistant wait", "LUNA is thinking...");
-  $("send").disabled = true;
-  try {
-    const data = await api("/api/chat", { method: "POST", body: JSON.stringify(body) });
-    waiting.className = "msg assistant";
-    waiting.textContent = data.reply;
-  } catch (error) {
-    waiting.textContent = "Error: " + error.message;
-  } finally {
-    $("send").disabled = false;
-    refreshApprovals();
-  }
-}
-
-async function openCamera() {
-  $("camera").hidden = false;
-  const devices = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === "videoinput");
-  const list = $("camera-list");
-  list.replaceChildren();
-  devices.forEach((d, i) => list.appendChild(new Option(d.label || "Camera " + (i + 1), d.deviceId)));
-  await startCamera(list.value);
-}
-
-async function startCamera(deviceId) {
-  if (stream) stream.getTracks().forEach((t) => t.stop());
-  stream = await navigator.mediaDevices.getUserMedia({ video: deviceId ? { deviceId: { exact: deviceId } } : true });
-  $("video").srcObject = stream;
-  // After the first permission, the browser shows the camera names.
-  const list = $("camera-list");
-  if ([...list.options].some((o) => !o.text || o.text.startsWith("Camera "))) {
-    const devices = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === "videoinput");
-    const current = list.value;
-    list.replaceChildren();
-    devices.forEach((d, i) => list.appendChild(new Option(d.label || "Camera " + (i + 1), d.deviceId)));
-    list.value = current;
-  }
-}
-
-function closeCamera() {
-  if (stream) stream.getTracks().forEach((t) => t.stop());
-  stream = null;
-  $("camera").hidden = true;
-}
-
-function snap() {
-  const video = $("video");
-  const scale = Math.min(1, 1280 / video.videoWidth);
-  const canvas = document.createElement("canvas");
-  canvas.width = Math.round(video.videoWidth * scale);
-  canvas.height = Math.round(video.videoHeight * scale);
-  canvas.getContext("2d").drawImage(video, 0, 0, canvas.width, canvas.height);
-  const url = canvas.toDataURL("image/jpeg", 0.85);
-  image = { media_type: "image/jpeg", data: url.split(",")[1] };
-  $("preview").src = url;
-  $("attachment").hidden = false;
-  closeCamera();
-  $("input").focus();
-}
-
-function clearImage() {
-  image = null;
-  $("attachment").hidden = true;
-  $("preview").removeAttribute("src");
-}
-
-async function refreshApprovals() {
-  const data = await api("/api/approvals");
-  $("approval-count").textContent = data.approvals.length ? "(" + data.approvals.length + ")" : "";
-  const list = $("approval-list");
-  list.replaceChildren();
-  if (!data.approvals.length) list.appendChild(element("p", "muted", "No requests wait for you."));
-  for (const item of data.approvals) {
-    const card = element("div", "card", item.summary + "\n");
-    card.appendChild(element("div", "muted", item.id + " - " + item.created));
-    const row = element("div", "row");
-    for (const action of ["approve", "deny"]) {
-      const button = element("button", "", action === "approve" ? "Approve" : "Deny");
-      button.addEventListener("click", async () => {
-        button.disabled = true;
-        const result = await api("/api/approvals/" + item.id + "/" + action, { method: "POST", body: "{}" });
-        card.replaceChildren(element("div", "", result.result));
-        refreshApprovals();
-      });
-      row.appendChild(button);
-    }
-    card.appendChild(row);
-    list.appendChild(card);
-  }
-}
-
-async function loadMoney() {
-  $("money-text").textContent = "Loading...";
-  $("money-text").textContent = (await api("/api/money")).text;
-}
-
-async function loadSystem() {
-  const data = await api("/api/system");
-  const box = $("system-info");
-  box.replaceChildren();
-  const table = element("table");
-  const rows = [
-    ["Started", data.started], ["Updates", data.update], ["Memory", data.memory],
-    ["Waiting approvals", String(data.pending_approvals)],
-    ...Object.entries(data.settings).map(([k, v]) => [k, typeof v === "object" ? JSON.stringify(v) : String(v)]),
-  ];
-  for (const [k, v] of rows) {
-    const tr = element("tr");
-    tr.appendChild(element("td", "muted", k));
-    tr.appendChild(element("td", "", v));
-    table.appendChild(tr);
-  }
-  box.appendChild(table);
-  box.appendChild(element("h3", "", "Recent events"));
-  const log = element("pre");
-  log.textContent = data.events.map((e) => e.time.slice(0, 19).replace("T", " ") + "  " + e.event).join("\n");
-  box.appendChild(log);
-}
-
-function show(panel) {
-  document.querySelectorAll("nav button").forEach((b) => b.classList.toggle("active", b.dataset.panel === panel));
-  document.querySelectorAll(".panel").forEach((p) => p.classList.toggle("active", p.id === panel));
-  if (panel === "approvals") refreshApprovals();
-  if (panel === "money") loadMoney().catch((e) => ($("money-text").textContent = "Error: " + e.message));
-  if (panel === "system") loadSystem();
-}
-
-document.addEventListener("DOMContentLoaded", () => {
-  document.querySelectorAll("nav button").forEach((b) => b.addEventListener("click", () => show(b.dataset.panel)));
-  $("composer").addEventListener("submit", send);
-  $("input").addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) send(e); });
-  $("camera-open").addEventListener("click", () => openCamera().catch((e) => alertInChat(e)));
-  $("camera-list").addEventListener("change", (e) => startCamera(e.target.value));
-  $("camera-close").addEventListener("click", closeCamera);
-  $("snap").addEventListener("click", snap);
-  $("drop").addEventListener("click", clearImage);
-  loadHistory().catch((e) => addMessage("assistant wait", "Error: " + e.message));
-  refreshApprovals().catch(() => {});
-  setInterval(() => refreshApprovals().catch(() => {}), 30000);
-});
-
-function alertInChat(error) { addMessage("assistant wait", "Camera error: " + error.message); }
-"""
-#+end_src
-
-** Web tests
+The Phoenix tests cover the login, the page and the origin.
+These tests cover the core side of the contract.
 
 #+begin_src python :tangle ../pkgs/luna-core/tests/test_web.py
 import asyncio
 import base64
+import stat
 
+import aiohttp
 from aiohttp.test_utils import TestClient, TestServer
 
 from luna_core.approvals import Approvals
 from luna_core.audit import AuditLog
-from luna_core.web import WebApp
-
-OWNER = "cooper@oscarfono.com"
-ORIGIN = "https://luna.example.ts.net:8443"
-GOOD = {"Tailscale-User-Login": OWNER, "Origin": ORIGIN, "X-Luna": "1"}
+from luna_core.web import WebApp, serve
 
 
 class FakeAgent:
@@ -4625,7 +4324,7 @@ def make(tmp_path):
 
     approvals.register("test", executor)
     agent = FakeAgent()
-    return WebApp(agent, approvals, audit, OWNER, ORIGIN), agent, approvals, calls
+    return WebApp(agent, approvals, audit), agent, approvals, calls
 
 
 def run(webapp, scenario):
@@ -4635,38 +4334,18 @@ def run(webapp, scenario):
     return asyncio.run(go())
 
 
-def test_no_login_is_refused(tmp_path):
+def test_history(tmp_path):
     webapp, *_ = make(tmp_path)
     async def scenario(client):
-        return (await client.get("/")).status, (await client.get("/", headers={"Tailscale-User-Login": "x@y"})).status
-    assert run(webapp, scenario) == (403, 403)
-
-
-def test_owner_gets_the_page_with_a_strict_policy(tmp_path):
-    webapp, *_ = make(tmp_path)
-    async def scenario(client):
-        response = await client.get("/", headers={"Tailscale-User-Login": OWNER})
-        return response.status, response.headers["Content-Security-Policy"], await response.text()
-    status, csp, text = run(webapp, scenario)
-    assert status == 200 and "script-src 'self'" in csp and "<title>LUNA</title>" in text
-
-
-def test_post_needs_origin_and_header(tmp_path):
-    webapp, agent, *_ = make(tmp_path)
-    async def scenario(client):
-        bad = await client.post("/api/chat", json={"text": "x"}, headers={"Tailscale-User-Login": OWNER})
-        other = await client.post("/api/chat", json={"text": "x"},
-                                  headers={**GOOD, "Origin": "https://evil.example"})
-        return bad.status, other.status
-    assert run(webapp, scenario) == (403, 403)
-    assert agent.asked == []
+        return await (await client.get("/api/history")).json()
+    assert run(webapp, scenario)["messages"][1] == {"role": "assistant", "text": "hi"}
 
 
 def test_chat_with_an_image(tmp_path):
     webapp, agent, *_ = make(tmp_path)
     data = base64.b64encode(b"\xff\xd8fake-jpeg").decode()
     async def scenario(client):
-        response = await client.post("/api/chat", headers=GOOD,
+        response = await client.post("/api/chat",
                                      json={"text": "what is this?", "image": {"media_type": "image/jpeg", "data": data}})
         return response.status, await response.json()
     status, body = run(webapp, scenario)
@@ -4677,19 +4356,19 @@ def test_chat_with_an_image(tmp_path):
 def test_bad_image_is_refused(tmp_path):
     webapp, agent, *_ = make(tmp_path)
     async def scenario(client):
-        a = await client.post("/api/chat", headers=GOOD, json={"text": "x", "image": {"media_type": "image/gif", "data": "AA=="}})
-        b = await client.post("/api/chat", headers=GOOD, json={"text": "x", "image": {"media_type": "image/png", "data": "not base64!"}})
+        a = await client.post("/api/chat", json={"text": "x", "image": {"media_type": "image/gif", "data": "AA=="}})
+        b = await client.post("/api/chat", json={"text": "x", "image": {"media_type": "image/png", "data": "not base64!"}})
         return a.status, b.status
     assert run(webapp, scenario) == (400, 400)
     assert agent.asked == []
 
 
-def test_approve_from_the_page(tmp_path):
+def test_approve(tmp_path):
     webapp, _, approvals, calls = make(tmp_path)
     item = asyncio.run(approvals.request("test", {"x": 1}, "Test payment"))
     async def scenario(client):
-        listed = await (await client.get("/api/approvals", headers=GOOD)).json()
-        result = await (await client.post(f"/api/approvals/{item.id}/approve", headers=GOOD, json={})).json()
+        listed = await (await client.get("/api/approvals")).json()
+        result = await (await client.post(f"/api/approvals/{item.id}/approve", json={})).json()
         return listed, result
     listed, result = run(webapp, scenario)
     assert listed["approvals"][0]["summary"] == "Test payment"
@@ -4699,42 +4378,65 @@ def test_approve_from_the_page(tmp_path):
 def test_money_is_off_by_default(tmp_path):
     webapp, *_ = make(tmp_path)
     async def scenario(client):
-        return await (await client.get("/api/money", headers=GOOD)).json()
+        return await (await client.get("/api/money")).json()
     assert "Money is off" in run(webapp, scenario)["text"]
 
 
-def test_system_panel(tmp_path):
+def test_system(tmp_path):
     webapp, *_ = make(tmp_path)
     async def scenario(client):
-        return await (await client.get("/api/system", headers=GOOD)).json()
+        return await (await client.get("/api/system")).json()
     data = run(webapp, scenario)
     assert data["pending_approvals"] == 0 and "update" in data
+
+
+def test_serve_on_a_unix_socket(tmp_path):
+    webapp, *_ = make(tmp_path)
+    path = tmp_path / "api.sock"
+    path.write_text("an old socket")
+    async def go():
+        await serve(webapp, path)
+        connector = aiohttp.UnixConnector(path=str(path))
+        async with aiohttp.ClientSession(connector=connector) as session:
+            async with session.get("http://core/api/money") as response:
+                return await response.json()
+    assert "Money is off" in asyncio.run(go())["text"]
+    assert stat.S_ISSOCK(path.stat().st_mode)
 #+end_src
 
 * Build: the Phoenix app
 
-This section is stage E1 of [[*LUNA on Elixir][LUNA on Elixir]].
-The Phoenix app =luna-web= replaces the Python app at port 8443.
-In E1 the page shows the login, the live socket and the database.
-The panels come in stage E2.
+This section is stages E1 and E2 of [[*LUNA on Elixir][LUNA on Elixir]].
+The Phoenix app =luna-web= is at =https://luna.<tailnet>:8443=.
+The page has four panels: Chat, Approvals, Money and System.
+Chat accepts a camera image with a message.
+Each panel gets its data from [[*Build: the core API][the core API]].
 
-** Ports during the move
+| Tailnet port | Local                     | App                  |
+|--------------+---------------------------+----------------------|
+| 443          | 127.0.0.1:8008            | Synapse              |
+| 8443         | 127.0.0.1:8091            | =luna-web= (Phoenix) |
+| none         | =/run/luna-api/api.sock=  | The core API         |
 
-The Python app stays in service until E2 is done.
-=tailscale serve= publishes the two apps on the tailnet.
+Stage E1 used port 8444 for the Python page. Stage E2 deleted that page.
 
-| Tailnet port | Local port      | App                          |
-|--------------+-----------------+------------------------------|
-| 443          | 127.0.0.1:8008  | Synapse                      |
-| 8443         | 127.0.0.1:8091  | =luna-web= (Phoenix)         |
-| 8444         | 127.0.0.1:8090  | The Python app, until E2     |
+** Camera
 
-The Python app gets the origin =https://luna.<tailnet>:8444=.
-Its origin check uses that value.
+The browser lists each camera that is connected to the computer.
+"Show LUNA" takes one frame, and makes the frame 1280 pixels wide or less.
+The frame goes with the next message to the Claude API.
+LUNA does not keep the image on luna.
+When you leave the Chat panel, LUNA forgets the image.
+
+** Safety of the page
+
+The page shows each reply as plain text. HEEx escapes each value.
+A reply cannot run a script in the page, even if a web page told the model to write one.
+The Content-Security-Policy allows scripts from the app only.
 
 ** Login
 
-The login is the same as in the Python app.
+The login is the same as the login of the first Python page.
 The plug =LunaWeb.Owner= accepts a request only when the header =Tailscale-User-Login= is the owner login.
 The plug comes before the static files, so each file needs the login.
 
@@ -4819,7 +4521,7 @@ beamPackages.mixRelease {
   mixFodDeps = beamPackages.fetchMixDeps {
     pname = "${pname}-deps";
     inherit version src;
-    hash = "sha256-grka9MK6rgUdz6ma5LtsY/ZHipdqMdM1vaBuEHUedxk=";
+    hash = "sha256-0JkMkk9EG3v6KxpgPOiNNX/LDkFNzQZP3sdw9oRkZq0=";
   };
 
   # The tests need a PostgreSQL server. The check starts one in the build
@@ -4885,7 +4587,8 @@ defmodule LunaWeb.MixProject do
       {:phoenix, "~> 1.8"},
       {:phoenix_html, "~> 4.4"},
       {:phoenix_live_view, "~> 1.2"},
-      {:postgrex, "~> 0.22"}
+      {:postgrex, "~> 0.22"},
+      {:req, "~> 0.7"}
     ]
   end
 end
@@ -4913,6 +4616,8 @@ config :logger, :default_formatter, format: "[$level] $message\n"
 
 if config_env() == :test do
   config :luna_web, :owner_login, "owner@example.com"
+  # test_helper.exs starts the fake core on this socket.
+  config :luna_web, :core_socket, Path.join(System.get_env("TMPDIR", "/tmp"), "luna-fake-core.sock")
 
   config :luna_web, LunaWeb.Endpoint,
     url: [scheme: "https", host: "luna.example.ts.net", port: 8443],
@@ -4947,6 +4652,7 @@ if config_env() == :prod do
   uri = URI.parse(origin)
 
   config :luna_web, :owner_login, env.("LUNA_OWNER_LOGIN")
+  config :luna_web, :core_socket, env.("LUNA_CORE_SOCKET")
 
   config :luna_web, LunaWeb.Endpoint,
     server: true,
@@ -4989,6 +4695,114 @@ end
 defmodule LunaWeb.Repo do
   @moduledoc "The PostgreSQL database. The connection uses the unix socket and peer authentication."
   use Ecto.Repo, otp_app: :luna_web, adapter: Ecto.Adapters.Postgres
+end
+#+end_src
+
+** Core client
+
+=LunaWeb.Core= is the client of [[*Build: the core API][the core API]].
+Req sends each request on the unix socket.
+The client checks an image and an approval ID before the request.
+The core checks them again, because the core is the trust boundary of the agent.
+
+#+begin_src elixir :tangle ../pkgs/luna-web/lib/luna_web/core.ex
+defmodule LunaWeb.Core do
+  @moduledoc """
+  The client of the core API. Refer to "Build: the core API" in LUNA.org.
+
+  The core API is JSON over HTTP on a unix socket. Each function returns
+  {:ok, value} or {:error, message}. The message is for the owner.
+  """
+
+  @image_types ~w(image/jpeg image/png image/webp)
+  @max_image_bytes 5 * 1024 * 1024
+  # The agent can use tools for some minutes before it replies.
+  @chat_timeout :timer.minutes(10)
+
+  def history do
+    with {:ok, %{"messages" => messages}} <- request(:get, "/api/history"), do: {:ok, messages}
+  end
+
+  @doc "Sends a message and an optional image. The image is checked before the request."
+  def chat(text, image) when is_binary(text) do
+    text = String.trim(text)
+
+    with {:ok, image} <- check_image(image),
+         :ok <- check_message(text, image),
+         body = if(image, do: %{text: text, image: image}, else: %{text: text}),
+         {:ok, %{"reply" => reply}} <-
+           request(:post, "/api/chat", json: body, receive_timeout: @chat_timeout) do
+      {:ok, reply}
+    end
+  end
+
+  def approvals do
+    with {:ok, %{"approvals" => items}} <- request(:get, "/api/approvals"), do: {:ok, items}
+  end
+
+  def decide(id, action) when action in ["approve", "deny"] do
+    if Regex.match?(~r/\A[0-9a-f]{1,32}\z/, id) do
+      with {:ok, %{"result" => result}} <-
+             request(:post, "/api/approvals/#{id}/#{action}", json: %{}),
+           do: {:ok, result}
+    else
+      {:error, "The request ID is not valid."}
+    end
+  end
+
+  def decide(_id, _action), do: {:error, "Use approve or deny."}
+
+  def money do
+    with {:ok, %{"text" => text}} <- request(:get, "/api/money"), do: {:ok, text}
+  end
+
+  def system, do: request(:get, "/api/system")
+
+  @doc "Checks an image from the page. nil is no image."
+  def check_image(nil), do: {:ok, nil}
+
+  def check_image(%{"media_type" => type, "data" => data})
+      when type in @image_types and is_binary(data) do
+    case Base.decode64(data) do
+      {:ok, bytes} when byte_size(bytes) <= @max_image_bytes ->
+        {:ok, %{"media_type" => type, "data" => data}}
+
+      {:ok, _} ->
+        {:error, "The image is more than 5 MB."}
+
+      :error ->
+        {:error, "The image data is not valid base64."}
+    end
+  end
+
+  def check_image(_), do: {:error, "LUNA accepts JPEG, PNG or WebP images."}
+
+  defp check_message("", nil), do: {:error, "Write a message."}
+  defp check_message(_text, _image), do: :ok
+
+  defp request(method, path, opts \\ []) do
+    socket = Application.fetch_env!(:luna_web, :core_socket)
+
+    opts =
+      Keyword.merge(
+        [method: method, url: "http://core" <> path, unix_socket: socket, retry: false],
+        opts
+      )
+
+    case Req.request(opts) do
+      {:ok, %{status: 200, body: body}} when is_map(body) ->
+        {:ok, body}
+
+      {:ok, %{body: %{"error" => message}}} when is_binary(message) ->
+        {:error, message}
+
+      {:ok, %{status: status}} ->
+        {:error, "The core replied with the status #{status}."}
+
+      {:error, _} ->
+        {:error, "The LUNA core is not available. Try again in some minutes."}
+    end
+  end
 end
 #+end_src
 
@@ -5139,7 +4953,8 @@ defmodule LunaWeb.Endpoint do
   # Phoenix dispatches the socket before the plugs below.
   # LunaWeb.Owner.on_mount/4 checks the owner. check_origin checks the origin.
   socket "/live", Phoenix.LiveView.Socket,
-    websocket: [connect_info: [session: @session_options]],
+    # A camera frame is 5 MB or less, and base64 makes it 4/3 larger.
+    websocket: [connect_info: [session: @session_options], max_frame_size: 8_000_000],
     longpoll: false
 
   plug Plug.RequestId
@@ -5200,7 +5015,11 @@ end
 
 ** Page
 
-The page shows each value as text. HEEx escapes each value.
+The LiveView keeps the state of the page on the server.
+Two small hooks in =app.js= do the work that needs the browser:
+- =Composer= sends the message box. Enter sends, Shift+Enter is a new line.
+  The box clears only when the server accepts the message.
+- =Camera= opens the camera, takes one frame and shows a preview.
 
 #+begin_src elixir :tangle ../pkgs/luna-web/lib/luna_web/layouts.ex
 defmodule LunaWeb.Layouts do
@@ -5233,66 +5052,387 @@ end
 #+begin_src elixir :tangle ../pkgs/luna-web/lib/luna_web/live/home_live.ex
 defmodule LunaWeb.HomeLive do
   @moduledoc """
-  The stage E1 page. The page shows the login, the socket and the database.
-  The panels come in stage E2. Until then, the Python app is at port 8444.
+  The page: Chat, Approvals, Money and System. Each panel gets its data
+  from the core API through LunaWeb.Core. HEEx shows each value as text.
   """
   use Phoenix.LiveView
 
+  alias LunaWeb.Core
+
+  @panels ~w(chat approvals money system)
+  @refresh :timer.seconds(30)
+
   @impl true
   def mount(_params, _session, socket) do
-    if connected?(socket), do: LunaWeb.Audit.write("web.connect")
-    {:ok, assign(socket, connected: connected?(socket), database: database())}
+    socket =
+      assign(socket,
+        panel: "chat",
+        messages: [],
+        waiting: false,
+        image: nil,
+        approvals: [],
+        money: nil,
+        system: nil,
+        notice: nil
+      )
+
+    if connected?(socket) do
+      LunaWeb.Audit.write("web.connect")
+      :timer.send_interval(@refresh, :refresh)
+      {:ok, socket |> load_history() |> load_approvals()}
+    else
+      {:ok, socket}
+    end
   end
+
+  @impl true
+  def handle_event("show", %{"panel" => panel}, socket) when panel in @panels do
+    # The camera preview goes when the chat panel goes. The image goes too.
+    socket = assign(socket, panel: panel, notice: nil, image: nil)
+
+    socket =
+      case panel do
+        "approvals" -> load_approvals(socket)
+        "money" -> load(socket, :money, Core.money())
+        "system" -> load(socket, :system, Core.system())
+        "chat" -> socket
+      end
+
+    {:noreply, socket}
+  end
+
+  def handle_event("attach", image, socket) do
+    case Core.check_image(image) do
+      {:ok, image} -> {:noreply, assign(socket, image: image, notice: nil)}
+      {:error, message} -> {:noreply, socket |> assign(image: nil, notice: message) |> push_event("image-cleared", %{})}
+    end
+  end
+
+  def handle_event("detach", _params, socket), do: {:noreply, assign(socket, image: nil)}
+
+  def handle_event("camera-error", %{"message" => message}, socket) when is_binary(message) do
+    {:noreply, assign(socket, notice: "Camera error: " <> String.slice(message, 0, 200))}
+  end
+
+  # The reply tells the page to clear the message box. "sent: false" keeps the text.
+  def handle_event("send", _params, %{assigns: %{waiting: true}} = socket) do
+    {:reply, %{sent: false}, assign(socket, notice: "Wait for the reply to the last message.")}
+  end
+
+  def handle_event("send", %{"text" => text}, socket) when is_binary(text) do
+    image = socket.assigns.image
+
+    case Core.check_image(image) do
+      {:ok, _} when text == "" and is_nil(image) ->
+        {:reply, %{sent: false}, socket}
+
+      {:ok, _} ->
+        shown = if image, do: String.trim(text) <> "\n[image]", else: String.trim(text)
+
+        socket =
+          socket
+          |> assign(waiting: true, image: nil, notice: nil)
+          |> add_message("user", shown)
+          |> push_event("image-cleared", %{})
+          |> start_async(:chat, fn -> Core.chat(text, image) end)
+
+        {:reply, %{sent: true}, socket}
+
+      {:error, message} ->
+        {:reply, %{sent: false}, assign(socket, notice: message)}
+    end
+  end
+
+  def handle_event("decide", %{"id" => id, "action" => action}, socket) do
+    notice =
+      case Core.decide(id, action) do
+        {:ok, result} -> result
+        {:error, message} -> message
+      end
+
+    {:noreply, socket |> assign(notice: notice) |> load_approvals()}
+  end
+
+  @impl true
+  def handle_async(:chat, result, socket) do
+    text =
+      case result do
+        {:ok, {:ok, reply}} -> reply
+        {:ok, {:error, message}} -> "Error: " <> message
+        {:exit, _reason} -> "Error: the request stopped."
+      end
+
+    {:noreply, socket |> assign(waiting: false) |> add_message("assistant", text) |> load_approvals()}
+  end
+
+  @impl true
+  def handle_info(:refresh, socket), do: {:noreply, load_approvals(socket)}
+
+  defp load_history(socket) do
+    case Core.history() do
+      {:ok, messages} ->
+        assign(socket, messages: Enum.map(messages, &message(&1["role"], &1["text"])))
+
+      {:error, text} ->
+        assign(socket, notice: text)
+    end
+  end
+
+  defp load_approvals(socket) do
+    case Core.approvals() do
+      {:ok, items} -> assign(socket, approvals: items)
+      {:error, text} -> assign(socket, notice: text)
+    end
+  end
+
+  defp load(socket, key, {:ok, value}), do: assign(socket, key, value)
+  defp load(socket, _key, {:error, text}), do: assign(socket, notice: text)
+
+  defp add_message(socket, role, text),
+    do: assign(socket, messages: socket.assigns.messages ++ [message(role, text)])
+
+  # Only two roles. A different value from the core becomes "assistant".
+  defp message("user", text), do: %{role: "user", text: to_string(text)}
+  defp message(_role, text), do: %{role: "assistant", text: to_string(text)}
+
+  defp setting(value) when is_binary(value), do: value
+  defp setting(value), do: Jason.encode!(value)
+
+  defp event_line(%{"time" => time, "event" => event}) do
+    (time |> to_string() |> String.slice(0, 19) |> String.replace("T", " ")) <> "  " <> to_string(event)
+  end
+
+  defp event_line(_), do: ""
 
   @impl true
   def render(assigns) do
     ~H"""
-    <main>
+    <header>
       <h1>LUNA</h1>
-      <dl>
-        <dt>Login</dt>
-        <dd>{@owner_login}</dd>
-        <dt>Live socket</dt>
-        <dd id="socket">{if @connected, do: "connected", else: "not connected"}</dd>
-        <dt>Database</dt>
-        <dd id="database">{@database}</dd>
-      </dl>
-      <p>This is stage E1. The panels come in stage E2.</p>
-      <p>The Python panels are at port 8444 until then.</p>
+      <nav>
+        <button
+          :for={{panel, label} <- [{"chat", "Chat"}, {"approvals", "Approvals"}, {"money", "Money"}, {"system", "System"}]}
+          phx-click="show"
+          phx-value-panel={panel}
+          class={if @panel == panel, do: "active"}
+        >
+          {label}<span :if={panel == "approvals" and @approvals != []}> ({length(@approvals)})</span>
+        </button>
+      </nav>
+    </header>
+    <main>
+      <p :if={@notice} id="notice" class="notice">{@notice}</p>
+
+      <section :if={@panel == "chat"} id="chat">
+        <div id="messages" aria-live="polite">
+          <div :for={m <- @messages} class={"msg " <> m.role}>{m.text}</div>
+          <div :if={@waiting} class="msg assistant wait">LUNA is thinking...</div>
+        </div>
+        <div id="camera" phx-hook="Camera" phx-update="ignore">
+          <div class="camera-view" hidden>
+            <video autoplay playsinline muted></video>
+            <div class="row">
+              <select aria-label="Camera"></select>
+              <button type="button" data-action="snap">Show LUNA</button>
+              <button type="button" data-action="close">Close camera</button>
+            </div>
+          </div>
+          <div class="attachment" hidden>
+            <img alt="Image for LUNA" />
+            <button type="button" data-action="drop">Remove image</button>
+          </div>
+          <button type="button" data-action="open">Camera</button>
+        </div>
+        <form id="composer" phx-hook="Composer" phx-update="ignore">
+          <textarea name="text" rows="2" placeholder="Message LUNA. Enter sends, Shift+Enter is a new line."></textarea>
+          <button type="submit">Send</button>
+        </form>
+      </section>
+
+      <section :if={@panel == "approvals"} id="approvals">
+        <p :if={@approvals == []} class="muted">No requests wait for you.</p>
+        <div :for={item <- @approvals} class="card">
+          <div>{item["summary"]}</div>
+          <div class="muted">{item["id"]} - {item["created"]}</div>
+          <div class="row">
+            <button phx-click="decide" phx-value-id={item["id"]} phx-value-action="approve">Approve</button>
+            <button phx-click="decide" phx-value-id={item["id"]} phx-value-action="deny">Deny</button>
+          </div>
+        </div>
+      </section>
+
+      <section :if={@panel == "money"} id="money">
+        <pre>{@money || "Loading..."}</pre>
+      </section>
+
+      <section :if={@panel == "system"} id="system">
+        <table :if={@system}>
+          <tr><td class="muted">Started</td><td>{@system["started"]}</td></tr>
+          <tr><td class="muted">Updates</td><td>{@system["update"]}</td></tr>
+          <tr><td class="muted">Memory</td><td>{@system["memory"]}</td></tr>
+          <tr><td class="muted">Waiting approvals</td><td>{@system["pending_approvals"]}</td></tr>
+          <tr :for={{key, value} <- @system["settings"] || %{}}>
+            <td class="muted">{key}</td><td>{setting(value)}</td>
+          </tr>
+        </table>
+        <h3 :if={@system}>Recent events</h3>
+        <pre :if={@system}>{Enum.map_join(@system["events"] || [], "\n", &event_line/1)}</pre>
+      </section>
     </main>
     """
-  end
-
-  defp database do
-    case LunaWeb.Repo.query("SHOW server_version") do
-      {:ok, %{rows: [[version]]}} -> "PostgreSQL #{version}"
-      {:error, _} -> "not available"
-    end
   end
 end
 #+end_src
 
 #+begin_src js :tangle ../pkgs/luna-web/priv/static/app.js
-// Connect the LiveView socket. phoenix.min.js and phoenix_live_view.min.js
-// load first and set the globals Phoenix and LiveView.
+// The LiveView socket and two hooks. phoenix.min.js and
+// phoenix_live_view.min.js load first and set the globals Phoenix and LiveView.
 (function () {
   "use strict";
+
+  // The message box. Enter sends, Shift+Enter is a new line.
+  var Composer = {
+    mounted: function () {
+      var form = this.el;
+      var input = form.querySelector("textarea");
+      var hook = this;
+      var send = function (event) {
+        event.preventDefault();
+        hook.pushEvent("send", { text: input.value.trim() }, function (reply) {
+          if (reply && reply.sent) input.value = "";
+        });
+      };
+      form.addEventListener("submit", send);
+      input.addEventListener("keydown", function (event) {
+        if (event.key === "Enter" && !event.shiftKey) send(event);
+      });
+    }
+  };
+
+  // The camera. "Show LUNA" takes one frame, 1280 pixels wide or less.
+  // The frame goes to the server with the next message.
+  var Camera = {
+    mounted: function () {
+      var root = this.el;
+      var hook = this;
+      var view = root.querySelector(".camera-view");
+      var video = root.querySelector("video");
+      var list = root.querySelector("select");
+      var attachment = root.querySelector(".attachment");
+      var preview = attachment.querySelector("img");
+      this.stream = null;
+
+      var cameras = function () {
+        return navigator.mediaDevices.enumerateDevices().then(function (devices) {
+          var current = list.value;
+          list.replaceChildren();
+          devices.filter(function (d) { return d.kind === "videoinput"; }).forEach(function (d, i) {
+            list.appendChild(new Option(d.label || "Camera " + (i + 1), d.deviceId));
+          });
+          if (current) list.value = current;
+        });
+      };
+      var stop = function () {
+        if (hook.stream) hook.stream.getTracks().forEach(function (t) { t.stop(); });
+        hook.stream = null;
+      };
+      var start = function (deviceId) {
+        stop();
+        var video_options = deviceId ? { deviceId: { exact: deviceId } } : true;
+        return navigator.mediaDevices.getUserMedia({ video: video_options }).then(function (stream) {
+          hook.stream = stream;
+          video.srcObject = stream;
+          // After the first permission, the browser gives the camera names.
+          return cameras();
+        });
+      };
+      var clear = function () {
+        attachment.hidden = true;
+        preview.removeAttribute("src");
+      };
+      this.stop = stop;
+
+      root.addEventListener("click", function (event) {
+        var action = event.target.dataset && event.target.dataset.action;
+        if (action === "open") {
+          view.hidden = false;
+          cameras().then(function () { return start(list.value); }).catch(function (error) {
+            view.hidden = true;
+            hook.pushEvent("camera-error", { message: String(error.message || error) });
+          });
+        } else if (action === "close") {
+          stop();
+          view.hidden = true;
+        } else if (action === "snap") {
+          var scale = Math.min(1, 1280 / video.videoWidth);
+          var canvas = document.createElement("canvas");
+          canvas.width = Math.round(video.videoWidth * scale);
+          canvas.height = Math.round(video.videoHeight * scale);
+          canvas.getContext("2d").drawImage(video, 0, 0, canvas.width, canvas.height);
+          var url = canvas.toDataURL("image/jpeg", 0.85);
+          hook.pushEvent("attach", { media_type: "image/jpeg", data: url.split(",")[1] });
+          preview.src = url;
+          attachment.hidden = false;
+          stop();
+          view.hidden = true;
+        } else if (action === "drop") {
+          clear();
+          hook.pushEvent("detach", {});
+        }
+      });
+      list.addEventListener("change", function () { start(list.value); });
+      this.handleEvent("image-cleared", clear);
+    },
+    destroyed: function () {
+      if (this.stop) this.stop();
+    }
+  };
+
   var token = document.querySelector("meta[name='csrf-token']").getAttribute("content");
-  var socket = new LiveView.LiveSocket("/live", Phoenix.Socket, { params: { _csrf_token: token } });
+  var socket = new LiveView.LiveSocket("/live", Phoenix.Socket, {
+    params: { _csrf_token: token },
+    hooks: { Composer: Composer, Camera: Camera }
+  });
   socket.connect();
 })();
 #+end_src
 
 #+begin_src css :tangle ../pkgs/luna-web/priv/static/app.css
-:root { color-scheme: light dark; --fg: #1d1d22; --bg: #f6f5f2; --muted: #6b6b75; }
-@media (prefers-color-scheme: dark) { :root { --fg: #e8e6e3; --bg: #15151a; --muted: #9a9aa5; } }
-body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.5 system-ui, sans-serif; }
-main { max-width: 40rem; margin: 0 auto; padding: 2rem 1rem; }
-h1 { letter-spacing: 0.2em; font-weight: 600; }
-dl { display: grid; grid-template-columns: max-content 1fr; gap: 0.25rem 1rem; }
-dt { color: var(--muted); }
-dd { margin: 0; overflow-wrap: anywhere; }
-p { color: var(--muted); }
+:root { color-scheme: light dark; --bg: #f6f8fa; --panel: #ffffff; --text: #1f2328; --muted: #57606a;
+        --accent: #6f42c1; --mine: #eef1f5; --line: #d0d7de; }
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #0e1116; --panel: #161b22; --text: #e6edf3; --muted: #8b949e; --accent: #b392f0;
+          --mine: #1f2937; --line: #30363d; }
+}
+* { box-sizing: border-box; }
+body { margin: 0; font: 16px/1.5 system-ui, sans-serif; background: var(--bg); color: var(--text); }
+header { display: flex; align-items: center; justify-content: space-between; padding: 8px 16px;
+         background: var(--panel); border-bottom: 1px solid var(--line); flex-wrap: wrap; gap: 8px; }
+h1 { margin: 0; font-size: 20px; letter-spacing: 4px; color: var(--accent); }
+nav { display: flex; gap: 6px; flex-wrap: wrap; }
+button { background: none; border: 1px solid var(--line); color: var(--text); padding: 6px 12px;
+         border-radius: 6px; cursor: pointer; font: inherit; }
+nav button.active { border-color: var(--accent); color: var(--accent); }
+main { max-width: 900px; margin: 0 auto; padding: 16px; }
+#messages { display: flex; flex-direction: column; gap: 10px; min-height: 50vh; margin-bottom: 12px; }
+.msg { padding: 10px 14px; border-radius: 10px; white-space: pre-wrap; overflow-wrap: anywhere; max-width: 90%; }
+.msg.user { align-self: flex-end; background: var(--mine); }
+.msg.assistant { align-self: flex-start; background: var(--panel); border: 1px solid var(--line); }
+.msg.wait { color: var(--muted); font-style: italic; }
+#camera { margin-bottom: 8px; }
+#composer { display: flex; gap: 8px; align-items: flex-end; }
+textarea { flex: 1; resize: vertical; background: var(--panel); color: var(--text); border: 1px solid var(--line);
+           border-radius: 6px; padding: 8px; font: inherit; min-width: 0; }
+video { width: 100%; max-height: 50vh; background: #000; border-radius: 8px; }
+.row { display: flex; gap: 8px; margin: 8px 0; flex-wrap: wrap; }
+.attachment img { max-height: 120px; border-radius: 6px; display: block; margin-bottom: 6px; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px;
+        margin-bottom: 10px; white-space: pre-wrap; }
+.notice { border-left: 3px solid var(--accent); padding: 4px 10px; }
+pre { background: var(--panel); padding: 12px; border-radius: 8px; white-space: pre-wrap; overflow-wrap: anywhere; }
+table { border-collapse: collapse; width: 100%; }
+td { padding: 4px 8px; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+.muted { color: var(--muted); }
 #+end_src
 
 ** Tests
@@ -5301,6 +5441,7 @@ The tests run in the Nix build. =make check= runs the tests.
 Each test runs in a database transaction, and the transaction rolls back.
 
 #+begin_src elixir :tangle ../pkgs/luna-web/test/test_helper.exs
+:ok = LunaWeb.FakeCore.start()
 ExUnit.start()
 Ecto.Adapters.SQL.Sandbox.mode(LunaWeb.Repo, :manual)
 #+end_src
@@ -5320,6 +5461,159 @@ defmodule LunaWeb.Case do
 
   setup do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(LunaWeb.Repo)
+  end
+end
+#+end_src
+
+The fake core serves the contract on a real unix socket. Thus the tests also cover Req on a unix socket.
+
+#+begin_src elixir :tangle ../pkgs/luna-web/test/support/fake_core.ex
+defmodule LunaWeb.FakeCore do
+  @moduledoc """
+  A fake core API on a unix socket. It keeps each request that it gets.
+  The replies follow the contract in "Build: the core API".
+  """
+  use Plug.Router
+
+  plug :match
+  plug Plug.Parsers, parsers: [:json], json_decoder: Jason
+  plug :keep
+  plug :dispatch
+
+  def start do
+    path = Application.fetch_env!(:luna_web, :core_socket)
+    File.rm(path)
+    {:ok, _} = Agent.start_link(fn -> [] end, name: __MODULE__.Requests)
+    {:ok, _} = Bandit.start_link(plug: __MODULE__, ip: {:local, path}, port: 0, startup_log: false)
+    :ok
+  end
+
+  def reset, do: Agent.update(__MODULE__.Requests, fn _ -> [] end)
+  def requests, do: Agent.get(__MODULE__.Requests, &Enum.reverse/1)
+
+  defp keep(conn, _opts) do
+    Agent.update(__MODULE__.Requests, &[{conn.method, conn.request_path, conn.body_params} | &1])
+    conn
+  end
+
+  get "/api/history" do
+    reply(conn, %{messages: [%{role: "user", text: "hello"}, %{role: "assistant", text: "hi"}]})
+  end
+
+  post "/api/chat" do
+    reply(conn, %{reply: "reply: " <> conn.body_params["text"]})
+  end
+
+  get "/api/approvals" do
+    reply(conn, %{approvals: [%{id: "a1b2c3", summary: "Test payment", created: "2026-11-20T00:00:00Z"}]})
+  end
+
+  post "/api/approvals/:id/approve" do
+    reply(conn, %{result: "done"})
+  end
+
+  get "/api/money" do
+    reply(conn, %{text: "Money is off. Refer to 'The gate for phase 2' in LUNA.org."})
+  end
+
+  get "/api/system" do
+    reply(conn, %{
+      started: "2026-11-20T00:00:00Z",
+      update: "nixpkgs is less than 14 days old.",
+      memory: "",
+      settings: %{model: "claude-opus-5-5"},
+      pending_approvals: 0,
+      events: []
+    })
+  end
+
+  defp reply(conn, body) do
+    conn |> put_resp_content_type("application/json") |> send_resp(200, Jason.encode!(body))
+  end
+end
+#+end_src
+
+Each Python web test has an Elixir test:
+
+| Python test (E1)                              | Elixir test                                                    |
+|-----------------------------------------------+----------------------------------------------------------------|
+| =test_no_login_is_refused=                    | a request with no login gets 403 / a different login gets 403  |
+| =test_owner_gets_the_page_with_a_strict_policy= | the owner gets the page with the security headers            |
+| =test_post_needs_origin_and_header=           | a socket from another origin gets 403                          |
+| =test_chat_with_an_image=                     | chat with an image                                             |
+| =test_bad_image_is_refused=                   | a bad image is refused                                         |
+| =test_approve_from_the_page=                  | approve from the page                                          |
+| =test_money_is_off_by_default=                | money is off by default                                        |
+| =test_system_panel=                           | the system panel                                               |
+
+#+begin_src elixir :tangle ../pkgs/luna-web/test/core_test.exs
+defmodule LunaWeb.CoreTest do
+  # One fake core serves all tests, so these tests do not run at the same time.
+  use LunaWeb.Case, async: false
+
+  alias LunaWeb.{Core, FakeCore}
+
+  @owner "owner@example.com"
+
+  setup do
+    FakeCore.reset()
+  end
+
+  @tag :capture_log
+  test "a socket from another origin gets 403, and the core gets no request" do
+    conn =
+      build_conn()
+      |> put_req_header("origin", "https://evil.example")
+      |> get("/live/websocket", %{"vsn" => "2.0.0"})
+
+    assert conn.status == 403
+    assert FakeCore.requests() == []
+  end
+
+  test "chat with an image" do
+    data = Base.encode64(<<0xFF, 0xD8>> <> "fake-jpeg")
+    image = %{"media_type" => "image/jpeg", "data" => data}
+    assert Core.chat("what is this?", image) == {:ok, "reply: what is this?"}
+
+    assert [{"POST", "/api/chat", %{"text" => "what is this?", "image" => ^image}}] =
+             FakeCore.requests()
+  end
+
+  test "a bad image is refused, and the core gets no request" do
+    assert {:error, _} = Core.chat("x", %{"media_type" => "image/gif", "data" => "AA=="})
+    assert {:error, _} = Core.chat("x", %{"media_type" => "image/png", "data" => "not base64!"})
+    assert {:error, "Write a message."} = Core.chat("  ", nil)
+    assert FakeCore.requests() == []
+  end
+
+  test "approve from the page" do
+    assert {:ok, [%{"summary" => "Test payment", "id" => id}]} = Core.approvals()
+    assert Core.decide(id, "approve") == {:ok, "done"}
+    assert {"POST", "/api/approvals/a1b2c3/approve", %{}} in FakeCore.requests()
+  end
+
+  test "a bad approval ID or action is refused, and the core gets no request" do
+    assert {:error, _} = Core.decide("../money", "approve")
+    assert {:error, _} = Core.decide("a1b2c3", "delete")
+    assert FakeCore.requests() == []
+  end
+
+  test "money is off by default" do
+    assert {:ok, text} = Core.money()
+    assert text =~ "Money is off"
+  end
+
+  test "the system panel" do
+    assert {:ok, %{"pending_approvals" => 0, "update" => _}} = Core.system()
+  end
+
+  test "the page has the four panels" do
+    conn = build_conn() |> put_req_header("tailscale-user-login", @owner) |> get("/")
+    body = html_response(conn, 200)
+
+    for label <- ["Chat", "Approvals", "Money", "System"], do: assert(body =~ label)
+
+    assert body =~ ~s(phx-hook="Camera")
   end
 end
 #+end_src
@@ -5360,9 +5654,7 @@ defmodule LunaWeb.WebTest do
   test "the owner gets the page with the security headers" do
     conn = build_conn() |> put_req_header("tailscale-user-login", @owner) |> get("/")
     body = html_response(conn, 200)
-    assert body =~ "LUNA"
-    assert body =~ @owner
-    assert body =~ "PostgreSQL"
+    assert body =~ "<title>LUNA</title>"
     [csp] = get_resp_header(conn, "content-security-policy")
     assert csp =~ "script-src 'self'"
     assert get_resp_header(conn, "x-content-type-options") == ["nosniff"]
@@ -5455,13 +5747,18 @@ in
   users.users.${user} = {
     isSystemUser = true;
     group = user;
+    # The only client of the core API. Refer to "Build: the core API".
+    extraGroups = [ "luna-api" ];
     home = stateDir;
   };
+  # core.nix makes this group too. A test of this module alone needs it here.
+  users.groups.luna-api = { };
 
   systemd.services.luna-web = {
     description = "LUNA web app (Phoenix)";
     # postgresql.target includes postgresql-setup, which makes the role.
-    after = [ "network.target" "postgresql.target" ];
+    # The page works without the core, and shows a notice for each panel.
+    after = [ "network.target" "postgresql.target" "luna-core.service" ];
     requires = [ "postgresql.target" ];
     wantedBy = [ "multi-user.target" ];
     environment = {
@@ -5469,6 +5766,7 @@ in
       LUNA_WEB_ORIGIN = "https://${fqdn}:8443";
       LUNA_WEB_PORT = "8091";
       LUNA_WEB_SECRET_FILE = "${stateDir}/secret_key_base";
+      LUNA_CORE_SOCKET = "/run/luna-api/api.sock";
       LUNA_DB_SOCKET_DIR = "/run/postgresql";
       LUNA_DB_USER = user;
       LUNA_DB_NAME = user;
@@ -5520,7 +5818,8 @@ To run the test, run =make web-vm-test= in =nyx/luna=.
 
 The test makes sure that:
 - the app refuses a request with no login,
-- the owner gets the page, and the page shows PostgreSQL 18,
+- the owner gets the page with the four panels,
+- the user =luna_web= is in the group =luna-api=,
 - the owner gets the static files,
 - PostgreSQL and =epmd= have no TCP port,
 - the refusal is in the audit log, and the audit log refuses DELETE,
@@ -5546,8 +5845,8 @@ testers.runNixOSTest {
     machine.wait_for_open_port(8091)
     machine.succeed("curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8091/ | grep -x 403")
     page = machine.succeed(f"curl -sf {owner} http://127.0.0.1:8091/")
-    assert "owner@example.com" in page, page
-    assert "PostgreSQL 18" in page, page
+    assert "Approvals" in page, page
+    machine.succeed("id -nG luna_web | grep -w luna-api")
     machine.succeed(f"curl -sf {owner} http://127.0.0.1:8091/vendor/phoenix_live_view.min.js >/dev/null")
     machine.fail("ss -ltn | grep -E ':(5432|4369) '")
     events = machine.succeed("sudo -u luna_web psql -tA -c 'SELECT event FROM audit_events' luna_web")

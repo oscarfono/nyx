@@ -31,7 +31,8 @@ defmodule LunaWeb.MixProject do
       {:phoenix, "~> 1.8"},
       {:phoenix_html, "~> 4.4"},
       {:phoenix_live_view, "~> 1.2"},
-      {:postgrex, "~> 0.22"}
+      {:postgrex, "~> 0.22"},
+      {:req, "~> 0.7"}
     ]
   end
 end

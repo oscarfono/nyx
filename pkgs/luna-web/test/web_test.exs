@@ -33,9 +33,7 @@ defmodule LunaWeb.WebTest do
   test "the owner gets the page with the security headers" do
     conn = build_conn() |> put_req_header("tailscale-user-login", @owner) |> get("/")
     body = html_response(conn, 200)
-    assert body =~ "LUNA"
-    assert body =~ @owner
-    assert body =~ "PostgreSQL"
+    assert body =~ "<title>LUNA</title>"
     [csp] = get_resp_header(conn, "content-security-policy")
     assert csp =~ "script-src 'self'"
     assert get_resp_header(conn, "x-content-type-options") == ["nosniff"]

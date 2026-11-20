@@ -17,8 +17,8 @@ testers.runNixOSTest {
     machine.wait_for_open_port(8091)
     machine.succeed("curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8091/ | grep -x 403")
     page = machine.succeed(f"curl -sf {owner} http://127.0.0.1:8091/")
-    assert "owner@example.com" in page, page
-    assert "PostgreSQL 18" in page, page
+    assert "Approvals" in page, page
+    machine.succeed("id -nG luna_web | grep -w luna-api")
     machine.succeed(f"curl -sf {owner} http://127.0.0.1:8091/vendor/phoenix_live_view.min.js >/dev/null")
     machine.fail("ss -ltn | grep -E ':(5432|4369) '")
     events = machine.succeed("sudo -u luna_web psql -tA -c 'SELECT event FROM audit_events' luna_web")
