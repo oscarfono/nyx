@@ -149,15 +149,22 @@ defmodule LunaCore.Api do
     |> send_resp(status, Jason.encode!(body))
   end
 
-  @doc "A child spec for Bandit on the unix socket at path. An old socket file goes first."
-  def child_spec(opts) do
+  @doc """
+  A child spec for Bandit on the unix socket at path. An old socket file goes
+  first. Erlang makes the socket with the mode 0700, so start_server/1 sets
+  0660 after each start with chmod(1): the group luna-api (luna_web) must connect.
+  """
+  def child_spec(opts), do: %{id: __MODULE__, start: {__MODULE__, :start_server, [opts]}, type: :supervisor}
+
+  def start_server(opts) do
     path = Keyword.fetch!(opts, :socket)
-    core = Keyword.fetch!(opts, :core)
     File.rm(path)
 
-    Supervisor.child_spec(
-      {Bandit, plug: {__MODULE__, core}, ip: {:local, path}, port: 0, startup_log: false},
-      id: __MODULE__
-    )
+    with {:ok, pid} <- Bandit.start_link(plug: {__MODULE__, Keyword.fetch!(opts, :core)}, ip: {:local, path}, port: 0, startup_log: false) do
+      # Not File.chmod: Erlang also calls chown(2) there, and the seccomp
+      # filter of the unit (~@privileged) kills the process for chown.
+      {_, 0} = System.cmd("chmod", ["0660", path])
+      {:ok, pid}
+    end
   end
 end

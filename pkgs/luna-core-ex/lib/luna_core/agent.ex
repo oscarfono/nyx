@@ -145,6 +145,11 @@ defmodule LunaCore.Agent do
       {:error, :rate_limit, _, state} ->
         {"The Claude API rate limit stopped me. Try again in a minute.", state}
 
+      # A billing problem is not a problem of the conversation. Keep the history.
+      {:error, :bad_request, "Your credit balance is too low" <> _ = detail, state} ->
+        Audit.write(audit(state), "agent.error", %{error: detail})
+        {"The Claude API account has no credit, so I cannot answer. Add credits in the Claude Console, then ask again.", state}
+
       {:error, :bad_request, detail, state} ->
         Audit.write(audit(state), "agent.error", %{error: detail})
         {"The Claude API refused the request, so I started a new conversation. (#{detail})", reset_state(state)}

@@ -119,4 +119,29 @@ defmodule LunaCore.Scheduler do
       {:noreply, opts}
     end
   end
+
+  defmodule Watch do
+    @moduledoc "Watches the Wise drafts that wait for the approval of Coops in the Wise app. Options: :payments, :audit, :every (ms)."
+    use GenServer
+
+    def start_link(opts), do: GenServer.start_link(__MODULE__, opts, name: Keyword.get(opts, :name, __MODULE__))
+
+    @impl true
+    def init(opts) do
+      Process.send_after(self(), :run, Keyword.get(opts, :every, :timer.minutes(5)))
+      {:ok, opts}
+    end
+
+    @impl true
+    def handle_info(:run, opts) do
+      try do
+        LunaCore.Payments.watch_once(Keyword.fetch!(opts, :payments))
+      rescue
+        error -> LunaCore.Audit.write(Keyword.fetch!(opts, :audit), "payments.watch_error", %{error: Exception.message(error)})
+      end
+
+      Process.send_after(self(), :run, Keyword.get(opts, :every, :timer.minutes(5)))
+      {:noreply, opts}
+    end
+  end
 end

@@ -446,7 +446,7 @@ Each idea has its source project and its stage.
 | 7  | Fixed widgets in chat: safe-to-spend gauge, bills, roster strip         | Leon, LibreChat   | E4    |
 | 8  | Labelled memory sections. Some sections are read-only to LUNA.          | Letta             | E5    |
 | 9  | Scheduled jobs in plain language, with the result in Matrix             | Hermes, Khoj      | E5    |
-| 10 | Refuse a tier 2 request from a scheduled job when no human is present   | OpenClaw          | core  |
+| 10 | Refuse a tier 2 request from a scheduled job when no human is present (done: the brief has no payment tool) | OpenClaw | E5 |
 | 11 | Transcribe voice memos from Matrix                                       | Hermes            | E5    |
 | 12 | Branch a conversation to compare plans                                  | LibreChat         | E4    |
 | 23 | Model profiles: cloud, local and local uncensored (abliterated). Switch by voice, button or =/model=. Code switches, not the model. | Coops | E5 |
@@ -645,6 +645,10 @@ Edit these values before the first install.
 
   # Set to true to send nudges to Telegram. Nudges contain no personal data.
   telegram = false;
+
+  # The core that runs as luna-core: "elixir" (stage E5) or "python".
+  # To go back to the Python core, set "python" and run make deploy.
+  core = "elixir";
 
   # CAUTION: keep false until the gate test in "The gate for phase 2" passes.
   # true gives the agent the money tools and starts the Monday money post.
@@ -1079,8 +1083,22 @@ LUNA and the laptop both push to the hub.
 { config, lib, pkgs, hostName, username, site, ... }:
 let
   luna-core = pkgs.callPackage ../../pkgs/luna-core { };
+  luna-core-ex = pkgs.callPackage ../../pkgs/luna-core-ex { };
   fqdn = "${hostName}.${site.tailnet}";
   stateDir = "/var/lib/luna";
+
+  # The Elixir release needs a cookie, but it has no Erlang distribution, so
+  # the cookie has no use on the network. The first start makes it.
+  startElixir = pkgs.writeShellScript "luna-core-ex-start" ''
+    set -euo pipefail
+    umask 077
+    if [ ! -s ${stateDir}/release-cookie ]; then
+      ${pkgs.openssl}/bin/openssl rand -hex 32 > ${stateDir}/release-cookie
+    fi
+    RELEASE_COOKIE="$(cat ${stateDir}/release-cookie)"
+    export RELEASE_COOKIE
+    exec ${luna-core-ex}/bin/luna_core start
+  '';
   secret = name: config.sops.secrets.${name}.path;
   credentials =
     [
@@ -1226,6 +1244,9 @@ in
       LUNA_WISE = builtins.toJSON site.wise;
       # The core API. Refer to "Build: the core API".
       LUNA_API_SOCKET = "/run/luna-api/api.sock";
+      # The Elixir core: no Erlang distribution, and a writable temporary directory.
+      RELEASE_DISTRIBUTION = "none";
+      RELEASE_TMP = "/run/luna-core";
       GIT_AUTHOR_NAME = "LUNA";
       GIT_AUTHOR_EMAIL = "luna@${fqdn}";
       GIT_COMMITTER_NAME = "LUNA";
@@ -1238,7 +1259,9 @@ in
         "+${pkgs.coreutils}/bin/install -d -m 2750 -o luna -g luna-api /run/luna-api"
         memoryInit
       ];
-      ExecStart = "${luna-core}/bin/luna-core";
+      ExecStart = if site.core == "elixir" then startElixir else "${luna-core}/bin/luna-core";
+      RuntimeDirectory = "luna-core";
+      RuntimeDirectoryMode = "0700";
       User = "luna";
       Group = "luna";
       UMask = "0007";
@@ -4545,7 +4568,8 @@ At the cutover, all ported tests pass, and the Python core retires.
 | 5    | Matrix bot, Telegram                      | (none)                  | 15 (new)     | Done    |
 | 6    | Scheduler                                 | scheduler               | 8            | Done    |
 | 7    | Money and the Wise float                  | money, payments         | 35           | Done    |
-| 8    | GEV and REA tools (new)                   |                         |              | Next    |
+| 8    | GEV and REA tools (new)                   |                         |              |         |
+| —    | Cutover: Config, Main, the unit switch    |                         | 2            | Done    |
 
 ** Changes from the Python core
 
@@ -4562,6 +4586,8 @@ At the cutover, all ported tests pass, and the Python core retires.
 - Each owner message runs in its own task. Thus =approve= works while the agent answers a question.
   In the Python bot, a long question stopped the commands until the reply.
 - After a 401 on sync, the bot deletes the session file and logs in again, once.
+- The core never calls =File.chmod=. Erlang also calls chown(2) there, and the seccomp filter of the
+  unit (=~@privileged=) kills the process. The core runs chmod(1) in its place.
 - The bot renders Markdown with its own small renderer. Refer to [[*Matrix messages][Matrix messages]].
 - The money code uses =decimal= 3.2. Earlier versions had two DoS advisories
   (EEF-CVE-2026-32686, EEF-CVE-2026-97853). Run =make deps-audit= after each lock change.
@@ -4676,18 +4702,199 @@ if config_env() == :test do
 end
 #+end_src
 
-** Application
+** Cutover
 
-The application starts no service yet. Each port step adds its services.
+The site value =core= selects the core that runs as =luna-core=. The unit is the same for the two cores:
+the same user, secrets, state, memory and socket. The Elixir core reads the same files as the Python core:
+the Matrix session, the owner room, the approvals, the audit log and the payment log.
+
+To go back to the Python core:
+1. In =hosts/luna/site.nix=, set =core = "python";=.
+2. Run =make deploy= in =nyx/luna=.
+
+The conversation is in memory only, in each core. A switch starts a new conversation.
+
+The brief agent has no payment tool. Thus a scheduled job cannot ask for a tier 2 action when no human is present (backlog #10).
+
+#+begin_src elixir :tangle ../pkgs/luna-core-ex/lib/luna_core/config.ex
+defmodule LunaCore.Config do
+  @moduledoc """
+  Reads the LUNA configuration from the environment and from the systemd
+  credentials. The names are the same as for the Python core, so the unit
+  in core.nix serves both.
+  """
+
+  @doc "The configuration map. Raises when a required setting is missing."
+  def load(env \\ System.get_env()) do
+    state_dir = Map.get(env, "LUNA_STATE_DIR", "/var/lib/luna")
+
+    %{
+      state_dir: state_dir,
+      homeserver: required(env, "LUNA_HOMESERVER"),
+      matrix_user: required(env, "LUNA_MATRIX_USER"),
+      owner: required(env, "LUNA_OWNER"),
+      owner_timezone: Map.get(env, "LUNA_OWNER_TIMEZONE", "Etc/UTC") |> zone(),
+      brief_time: Map.get(env, "LUNA_BRIEF_TIME", "07:00") |> brief_time(),
+      model: Map.get(env, "LUNA_MODEL", "claude-opus-5-5"),
+      effort: Map.get(env, "LUNA_EFFORT", "medium"),
+      anthropic_api_key: credential(env, "anthropic_api_key") || raise("LUNA: the setting anthropic_api_key is missing."),
+      matrix_password: credential(env, "matrix_password") || raise("LUNA: the setting matrix_password is missing."),
+      telegram_token: credential(env, "telegram_token"),
+      telegram_chat_id: credential(env, "telegram_chat_id"),
+      money_enabled: Map.get(env, "LUNA_MONEY", "0") == "1",
+      api_socket: Map.get(env, "LUNA_API_SOCKET", "/run/luna-api/api.sock"),
+      wise_json: Map.get(env, "LUNA_WISE", ~s({"mode": "off"})),
+      wise_token: credential(env, "wise_api_token"),
+      memory_dir: Path.join(state_dir, "memory"),
+      approvals_dir: Path.join(state_dir, "approvals"),
+      inbox_dir: Path.join(state_dir, "inbox"),
+      audit_file: Path.join([state_dir, "audit", "audit.jsonl"]),
+      payments_log: Path.join(state_dir, "payments.jsonl")
+    }
+  end
+
+  defp required(env, name) do
+    case Map.get(env, name) do
+      value when value in [nil, ""] -> raise "LUNA: the setting #{name} is missing."
+      value -> value
+    end
+  end
+
+  # A secret from $CREDENTIALS_DIRECTORY, or from the environment for a local test.
+  defp credential(env, name) do
+    from_file =
+      with dir when is_binary(dir) <- Map.get(env, "CREDENTIALS_DIRECTORY"),
+           {:ok, text} <- File.read(Path.join(dir, name)) do
+        String.trim(text)
+      else
+        _ -> nil
+      end
+
+    from_file || Map.get(env, "LUNA_" <> String.upcase(name))
+  end
+
+  # The Python core accepted "UTC". tz names it "Etc/UTC".
+  defp zone("UTC"), do: "Etc/UTC"
+  defp zone(name), do: name
+
+  defp brief_time(text) do
+    [h, m] = text |> String.split(":") |> Enum.map(&String.to_integer/1)
+    Time.new!(h, m, 0)
+  end
+end
+#+end_src
+
+#+begin_src elixir :tangle ../pkgs/luna-core-ex/lib/luna_core/main.ex
+defmodule LunaCore.Main do
+  @moduledoc """
+  The supervision tree of the LUNA core: the same parts as main.py of the
+  Python core. children/1 is a pure function of the configuration, so a test
+  can start the whole core against fake services.
+  """
+
+  alias LunaCore.{Agent, Api, Approvals, Audit, Matrix, Memory, Money, Payments, Scheduler, Sysinfo, Telegram, Tools}
+
+  def children(config) do
+    audit = config.audit_file
+    zone = config.owner_timezone
+    today = fn -> DateTime.now!(zone) |> DateTime.to_date() end
+    wise = Payments.settings(config.wise_json)
+    nudge = fn text -> Telegram.nudge(config.telegram_token, config.telegram_chat_id, text, audit) end
+
+    money =
+      if config.money_enabled,
+        do: %{root: config.memory_dir, memory: Memory, inbox: config.inbox_dir, audit: audit, today: today},
+        else: nil
+
+    payments =
+      if wise.mode != "off" do
+        %{settings: wise, log: config.payments_log, audit: audit, today: today, now: &DateTime.utc_now/0,
+          # In draft mode, LUNA tells the owner in Matrix about each draft.
+          notify: fn text -> Matrix.Bot.send_owner(text) end,
+          wise: if(config.wise_token, do: [token: config.wise_token] ++ Map.get(config, :wise_opts, []), else: nil)}
+      end
+
+    agent_opts = [
+      api_key: config.anthropic_api_key, model: config.model, effort: config.effort, zone: zone, audit: audit
+    ] ++ Map.get(config, :agent_opts, [])
+
+    base_tools = Tools.memory_tools(Memory, audit, fn -> DateTime.now!(zone) end)
+    money_tools = if money, do: Money.tools(money), else: []
+
+    [
+      {Memory, root: config.memory_dir, audit: audit, remote: Map.get(config, :remote, true)},
+      {Approvals, dir: config.approvals_dir, audit: audit},
+      # The chat agent gets the payment tool after the approvals start. Refer to init_payments/1.
+      {Agent, agent_opts ++ [tools: base_tools ++ money_tools]},
+      Supervisor.child_spec({Task, fn -> init_payments(payments) end}, id: :init_payments),
+      {Api,
+       socket: config.api_socket,
+       core: [
+         agent: {Agent, Agent},
+         approvals: Approvals,
+         audit: audit,
+         money: if(money, do: {Money, money}, else: nil),
+         settings: %{model: config.model, money: config.money_enabled, wise_mode: wise.mode, wise_sandbox: wise.sandbox},
+         memory_root: config.memory_dir,
+         started: DateTime.utc_now()
+       ]},
+      {Matrix.Bot,
+       homeserver: config.homeserver, user: config.matrix_user, owner: config.owner, password: config.matrix_password,
+       state_dir: config.state_dir, audit: audit, agent: {Agent, Agent}, approvals: Approvals, nudge: nudge},
+      {Scheduler.Brief,
+       at: config.brief_time, zone: zone, audit: audit,
+       # A fresh agent with no payment tool: a scheduled job cannot ask for a
+       # tier 2 action when no human is present (backlog #10).
+       ask: fn prompt -> brief_ask(agent_opts ++ [tools: base_tools ++ money_tools], prompt) end,
+       send: &Matrix.Bot.send_owner/1,
+       notice: &Sysinfo.update_notice/1,
+       money: if(money, do: fn -> Money.summary(money) end, else: nil)},
+      {Scheduler.Sync, memory: Memory, audit: audit}
+    ] ++
+      if(payments && wise.mode == "draft", do: [{Scheduler.Watch, payments: payments, audit: audit}], else: []) ++
+      [Supervisor.child_spec({Task, fn -> Audit.write(audit, "luna.start", %{model: config.model, core: "elixir"}) end}, id: :start_event)]
+  end
+
+  defp init_payments(nil), do: :ok
+
+  defp init_payments(payments) do
+    Agent.add_tools(Agent, Payments.tools(payments, Approvals))
+    Audit.write(payments.audit, "payments.ready", %{mode: payments.settings.mode, sandbox: payments.settings.sandbox,
+                                                     payees: payments.settings.payees |> Map.keys() |> Enum.sort()})
+  end
+
+  defp brief_ask(opts, prompt) do
+    {:ok, pid} = Agent.start_link(Keyword.put(opts, :name, nil))
+
+    try do
+      Agent.ask(pid, prompt)
+    after
+      GenServer.stop(pid)
+    end
+  end
+end
+#+end_src
+
+** Application
 
 #+begin_src elixir :tangle ../pkgs/luna-core-ex/lib/luna_core/application.ex
 defmodule LunaCore.Application do
-  @moduledoc "Starts the LUNA core. The services come in the later port steps."
+  @moduledoc """
+  Starts the LUNA core from the environment. The tests set start_services to
+  false and start the parts that they need.
+  """
   use Application
 
   @impl true
   def start(_type, _args) do
-    Supervisor.start_link([], strategy: :one_for_one, name: LunaCore.Supervisor)
+    children =
+      if Application.get_env(:luna_core, :start_services, true),
+        do: LunaCore.Main.children(LunaCore.Config.load()),
+        else: []
+
+    # A crash of one part restarts that part only. The Matrix bot and the agent
+    # wait 30 s and more between starts, as the Python unit did.
+    Supervisor.start_link(children, strategy: :one_for_one, name: LunaCore.Supervisor, max_restarts: 10, max_seconds: 600)
   end
 end
 #+end_src
@@ -5325,16 +5532,23 @@ defmodule LunaCore.Api do
     |> send_resp(status, Jason.encode!(body))
   end
 
-  @doc "A child spec for Bandit on the unix socket at path. An old socket file goes first."
-  def child_spec(opts) do
+  @doc """
+  A child spec for Bandit on the unix socket at path. An old socket file goes
+  first. Erlang makes the socket with the mode 0700, so start_server/1 sets
+  0660 after each start with chmod(1): the group luna-api (luna_web) must connect.
+  """
+  def child_spec(opts), do: %{id: __MODULE__, start: {__MODULE__, :start_server, [opts]}, type: :supervisor}
+
+  def start_server(opts) do
     path = Keyword.fetch!(opts, :socket)
-    core = Keyword.fetch!(opts, :core)
     File.rm(path)
 
-    Supervisor.child_spec(
-      {Bandit, plug: {__MODULE__, core}, ip: {:local, path}, port: 0, startup_log: false},
-      id: __MODULE__
-    )
+    with {:ok, pid} <- Bandit.start_link(plug: {__MODULE__, Keyword.fetch!(opts, :core)}, ip: {:local, path}, port: 0, startup_log: false) do
+      # Not File.chmod: Erlang also calls chown(2) there, and the seccomp
+      # filter of the unit (~@privileged) kills the process for chown.
+      {_, 0} = System.cmd("chmod", ["0660", path])
+      {:ok, pid}
+    end
   end
 end
 #+end_src
@@ -5650,6 +5864,11 @@ defmodule LunaCore.Agent do
 
       {:error, :rate_limit, _, state} ->
         {"The Claude API rate limit stopped me. Try again in a minute.", state}
+
+      # A billing problem is not a problem of the conversation. Keep the history.
+      {:error, :bad_request, "Your credit balance is too low" <> _ = detail, state} ->
+        Audit.write(audit(state), "agent.error", %{error: detail})
+        {"The Claude API account has no credit, so I cannot answer. Add credits in the Claude Console, then ask again.", state}
 
       {:error, :bad_request, detail, state} ->
         Audit.write(audit(state), "agent.error", %{error: detail})
@@ -6194,7 +6413,8 @@ defmodule LunaCore.Matrix.Bot do
           {:ok, %{"access_token" => token} = body} ->
             session = Map.take(body, ["user_id", "device_id", "access_token"])
             File.write!(path, Jason.encode!(session))
-            File.chmod!(path, 0o600)
+            # Not File.chmod: Erlang also calls chown(2), and the seccomp filter kills the process.
+            {_, 0} = System.cmd("chmod", ["0600", path])
             {:ok, %{state | token: token}}
 
           {:ok, _} ->
@@ -7451,6 +7671,31 @@ defmodule LunaCore.Scheduler do
       {:noreply, opts}
     end
   end
+
+  defmodule Watch do
+    @moduledoc "Watches the Wise drafts that wait for the approval of Coops in the Wise app. Options: :payments, :audit, :every (ms)."
+    use GenServer
+
+    def start_link(opts), do: GenServer.start_link(__MODULE__, opts, name: Keyword.get(opts, :name, __MODULE__))
+
+    @impl true
+    def init(opts) do
+      Process.send_after(self(), :run, Keyword.get(opts, :every, :timer.minutes(5)))
+      {:ok, opts}
+    end
+
+    @impl true
+    def handle_info(:run, opts) do
+      try do
+        LunaCore.Payments.watch_once(Keyword.fetch!(opts, :payments))
+      rescue
+        error -> LunaCore.Audit.write(Keyword.fetch!(opts, :audit), "payments.watch_error", %{error: Exception.message(error)})
+      end
+
+      Process.send_after(self(), :run, Keyword.get(opts, :every, :timer.minutes(5)))
+      {:noreply, opts}
+    end
+  end
 end
 #+end_src
 
@@ -7626,7 +7871,9 @@ defmodule LunaCore.ApiTest do
     start_supervised!({Api, socket: path, core: core})
     {:ok, %{status: 200, body: body}} = Req.get("http://core/api/money", unix_socket: path, retry: false)
     assert body["text"] =~ "Money is off"
-    assert {:ok, %File.Stat{type: :other}} = File.lstat(path)
+    assert {:ok, %File.Stat{type: :other, mode: mode}} = File.lstat(path)
+    # The group (luna-api) can read and write. Others cannot.
+    assert Bitwise.band(mode, 0o777) == 0o660
   end
 end
 #+end_src
@@ -7766,6 +8013,18 @@ defmodule LunaCore.AgentTest do
     {agent, _} = start_agent(ctx, [{400, %{"error" => %{"message" => "bad history"}}}])
     assert Agent.ask(agent, "x") =~ "started a new conversation. (bad history)"
     assert Agent.transcript(agent) == []
+  end
+
+  test "no credit keeps the conversation", ctx do
+    {agent, _} =
+      start_agent(ctx, [
+        {200, message("end_turn", [text("First.")])},
+        {400, %{"error" => %{"message" => "Your credit balance is too low to access the Anthropic API."}}}
+      ])
+
+    Agent.ask(agent, "one")
+    assert Agent.ask(agent, "two") =~ "no credit"
+    assert length(Agent.transcript(agent)) == 3
   end
 
   test "a refusal and a reply at the length limit", ctx do
@@ -8494,6 +8753,60 @@ defmodule LunaCore.PaymentsTest do
 
   test "the payment key is a version 4 UUID" do
     assert Payments.payment_key() =~ ~r/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+  end
+end
+#+end_src
+
+#+begin_src elixir :tangle ../pkgs/luna-core-ex/test/main_test.exs
+defmodule LunaCore.MainTest do
+  # The whole core, with the named processes, so this test does not run with others that name them.
+  use ExUnit.Case, async: false
+
+  alias LunaCore.{Config, FakeClaude, FakeHomeserver, Main}
+
+  @moduletag :tmp_dir
+
+  test "the configuration from the environment" do
+    env = %{"LUNA_HOMESERVER" => "http://hs", "LUNA_MATRIX_USER" => "@luna:x", "LUNA_OWNER" => "@coops:x",
+            "LUNA_ANTHROPIC_API_KEY" => "k", "LUNA_MATRIX_PASSWORD" => "p", "LUNA_OWNER_TIMEZONE" => "UTC",
+            "LUNA_BRIEF_TIME" => "07:30"}
+    config = Config.load(env)
+    assert config.owner_timezone == "Etc/UTC"
+    assert config.brief_time == ~T[07:30:00]
+    assert config.money_enabled == false
+    assert config.audit_file == "/var/lib/luna/audit/audit.jsonl"
+    assert_raise RuntimeError, ~r/LUNA_OWNER/, fn -> Config.load(Map.delete(env, "LUNA_OWNER")) end
+  end
+
+  test "the whole core starts: Matrix, the agent and the core API", %{tmp_dir: tmp} do
+    for {k, v} <- [{"GIT_CONFIG_GLOBAL", "/dev/null"}, {"GIT_CONFIG_NOSYSTEM", "1"}, {"GIT_AUTHOR_NAME", "t"},
+                   {"GIT_COMMITTER_NAME", "t"}, {"GIT_AUTHOR_EMAIL", "t@example.com"}, {"GIT_COMMITTER_EMAIL", "t@example.com"}],
+        do: System.put_env(k, v)
+
+    state = Path.join(tmp, "state")
+    for d <- ["approvals", "audit", "inbox", "memory"], do: File.mkdir_p!(Path.join(state, d))
+    {_, 0} = System.cmd("git", ["init", "--quiet", Path.join(state, "memory")])
+    claude = FakeClaude.start([{200, FakeClaude.message("end_turn", [FakeClaude.text("Hi from Elixir.")])}])
+    hs = FakeHomeserver.start([%{"next_batch" => "s1"}])
+    socket = Path.join(System.tmp_dir!(), "luna-main-#{System.unique_integer([:positive])}.sock")
+
+    config =
+      Config.load(%{"LUNA_STATE_DIR" => state, "LUNA_HOMESERVER" => hs.url, "LUNA_MATRIX_USER" => "@luna:test",
+                    "LUNA_OWNER" => "@coops:test", "LUNA_ANTHROPIC_API_KEY" => "k", "LUNA_MATRIX_PASSWORD" => "p",
+                    "LUNA_API_SOCKET" => socket})
+      |> Map.merge(%{remote: false, agent_opts: [base_url: claude.base_url, max_retries: 0]})
+
+    {:ok, sup} = Supervisor.start_link(Main.children(config), strategy: :one_for_one)
+    on_exit(fn -> File.rm(socket) end)
+
+    assert FakeHomeserver.await(hs, fn {_, p, _} -> p =~ "createRoom" end)
+    {:ok, %{status: 200, body: body}} = Req.post("http://core/api/chat", json: %{text: "hi"}, unix_socket: socket, retry: false)
+    assert body["reply"] == "Hi from Elixir."
+    {:ok, %{body: system}} = Req.get("http://core/api/system", unix_socket: socket, retry: false)
+    assert system["settings"]["wise_mode"] == "off"
+    Supervisor.stop(sup)
+    audit = File.read!(config.audit_file)
+    assert audit =~ "matrix.ready" and audit =~ ~s("core":"elixir")
   end
 end
 #+end_src

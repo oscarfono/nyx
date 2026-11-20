@@ -27,6 +27,10 @@
   # Set to true to send nudges to Telegram. Nudges contain no personal data.
   telegram = false;
 
+  # The core that runs as luna-core: "elixir" (stage E5) or "python".
+  # To go back to the Python core, set "python" and run make deploy.
+  core = "elixir";
+
   # CAUTION: keep false until the gate test in "The gate for phase 2" passes.
   # true gives the agent the money tools and starts the Monday money post.
   money = false;

@@ -90,6 +90,8 @@ defmodule LunaCore.ApiTest do
     start_supervised!({Api, socket: path, core: core})
     {:ok, %{status: 200, body: body}} = Req.get("http://core/api/money", unix_socket: path, retry: false)
     assert body["text"] =~ "Money is off"
-    assert {:ok, %File.Stat{type: :other}} = File.lstat(path)
+    assert {:ok, %File.Stat{type: :other, mode: mode}} = File.lstat(path)
+    # The group (luna-api) can read and write. Others cannot.
+    assert Bitwise.band(mode, 0o777) == 0o660
   end
 end

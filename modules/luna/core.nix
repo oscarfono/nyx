@@ -1,8 +1,22 @@
 { config, lib, pkgs, hostName, username, site, ... }:
 let
   luna-core = pkgs.callPackage ../../pkgs/luna-core { };
+  luna-core-ex = pkgs.callPackage ../../pkgs/luna-core-ex { };
   fqdn = "${hostName}.${site.tailnet}";
   stateDir = "/var/lib/luna";
+
+  # The Elixir release needs a cookie, but it has no Erlang distribution, so
+  # the cookie has no use on the network. The first start makes it.
+  startElixir = pkgs.writeShellScript "luna-core-ex-start" ''
+    set -euo pipefail
+    umask 077
+    if [ ! -s ${stateDir}/release-cookie ]; then
+      ${pkgs.openssl}/bin/openssl rand -hex 32 > ${stateDir}/release-cookie
+    fi
+    RELEASE_COOKIE="$(cat ${stateDir}/release-cookie)"
+    export RELEASE_COOKIE
+    exec ${luna-core-ex}/bin/luna_core start
+  '';
   secret = name: config.sops.secrets.${name}.path;
   credentials =
     [
@@ -148,6 +162,9 @@ in
       LUNA_WISE = builtins.toJSON site.wise;
       # The core API. Refer to "Build: the core API".
       LUNA_API_SOCKET = "/run/luna-api/api.sock";
+      # The Elixir core: no Erlang distribution, and a writable temporary directory.
+      RELEASE_DISTRIBUTION = "none";
+      RELEASE_TMP = "/run/luna-core";
       GIT_AUTHOR_NAME = "LUNA";
       GIT_AUTHOR_EMAIL = "luna@${fqdn}";
       GIT_COMMITTER_NAME = "LUNA";
@@ -160,7 +177,9 @@ in
         "+${pkgs.coreutils}/bin/install -d -m 2750 -o luna -g luna-api /run/luna-api"
         memoryInit
       ];
-      ExecStart = "${luna-core}/bin/luna-core";
+      ExecStart = if site.core == "elixir" then startElixir else "${luna-core}/bin/luna-core";
+      RuntimeDirectory = "luna-core";
+      RuntimeDirectoryMode = "0700";
       User = "luna";
       Group = "luna";
       UMask = "0007";

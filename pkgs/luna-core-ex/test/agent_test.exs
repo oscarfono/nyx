@@ -134,6 +134,18 @@ defmodule LunaCore.AgentTest do
     assert Agent.transcript(agent) == []
   end
 
+  test "no credit keeps the conversation", ctx do
+    {agent, _} =
+      start_agent(ctx, [
+        {200, message("end_turn", [text("First.")])},
+        {400, %{"error" => %{"message" => "Your credit balance is too low to access the Anthropic API."}}}
+      ])
+
+    Agent.ask(agent, "one")
+    assert Agent.ask(agent, "two") =~ "no credit"
+    assert length(Agent.transcript(agent)) == 3
+  end
+
   test "a refusal and a reply at the length limit", ctx do
     {agent, _} = start_agent(ctx, [{200, message("refusal", [])}, {200, message("max_tokens", [text("Long")])}])
     assert Agent.ask(agent, "x") == "The model declined this request."

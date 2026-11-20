@@ -307,7 +307,8 @@ defmodule LunaCore.Matrix.Bot do
           {:ok, %{"access_token" => token} = body} ->
             session = Map.take(body, ["user_id", "device_id", "access_token"])
             File.write!(path, Jason.encode!(session))
-            File.chmod!(path, 0o600)
+            # Not File.chmod: Erlang also calls chown(2), and the seccomp filter kills the process.
+            {_, 0} = System.cmd("chmod", ["0600", path])
             {:ok, %{state | token: token}}
 
           {:ok, _} ->
