@@ -76,7 +76,35 @@
   security.sudo-rs.execWheelOnly = true;
 
   security.polkit.enable = true;
-  security.pam.services.hyprlock = { };
+  # The hyprlock PAM service is in the list below.
+
+  # Fingerprint for polkit only. KeePassXC quick unlock asks polkit, and
+  # polkit then accepts a finger on the Synaptics reader (06cb:00bd,
+  # libfprint driver "synaptics"). The password still works when the
+  # reader fails. Enroll a finger once with `fprintd-enroll`.
+  #
+  # A fingerprint can be lifted or coerced, so login, sudo and the lock
+  # screens keep the password. With fprintd on, NixOS turns fprintAuth on
+  # for every PAM service by default, so the list below turns it off. The
+  # assertion stops a build in which a new service gets the fingerprint.
+  services.fprintd.enable = true;
+  security.pam.services = lib.genAttrs [
+    "chfn" "chpasswd" "chsh" "greetd" "groupadd" "groupdel" "groupmems"
+    "groupmod" "hyprlock" "i3lock" "i3lock-color" "login" "other" "passwd"
+    "runuser" "runuser-l" "sshd" "su" "su-l" "sudo" "sudo-i" "swaylock"
+    "systemd-run0" "systemd-user" "useradd" "userdel" "usermod" "vlock"
+    "xlock" "xscreensaver"
+  ] (_: { fprintAuth = false; }) // {
+    polkit-1.fprintAuth = true;
+  };
+  assertions = [
+    {
+      assertion = lib.all
+        (name: name == "polkit-1" || !config.security.pam.services.${name}.fprintAuth)
+        (lib.attrNames config.security.pam.services);
+      message = "A PAM service other than polkit-1 has fprintAuth. Add it to the list in modules/security.nix.";
+    }
+  ];
   security.pam.loginLimits = [
     { domain = "*"; item = "core"; type = "hard"; value = "0"; }
   ];

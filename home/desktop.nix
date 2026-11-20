@@ -627,6 +627,19 @@ in
   };
 
   # -------------------------------------------------------------------
+  # Polkit agent
+  # -------------------------------------------------------------------
+  # polkit asks the user through an authentication agent in the session.
+  # Without an agent, each polkit request fails with no prompt.
+  # Caelestia does not register as an agent.
+  #
+  # KeePassXC 2.8 uses polkit for quick unlock. Enable "Quick Unlock" in
+  # KeePassXC (Settings, Security). After the first full unlock, a locked
+  # database then opens with the polkit prompt, not the master password.
+  # A restart of KeePassXC asks for the master password again.
+  services.hyprpolkitagent.enable = true;
+
+  # -------------------------------------------------------------------
   # Lock and idle
   # -------------------------------------------------------------------
   programs.hyprlock = {
