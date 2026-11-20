@@ -28,6 +28,8 @@ defmodule LunaWeb.WebTest do
     assert get(build_conn(), "/app.js").status == 403
     conn = build_conn() |> put_req_header("tailscale-user-login", @owner) |> get("/app.js")
     assert conn.status == 200
+    # The browser must ask luna each time, so a deploy reaches the page.
+    assert get_resp_header(conn, "cache-control") == ["no-cache"]
   end
 
   test "the owner gets the page with the security headers" do

@@ -342,7 +342,7 @@ The review ran on 2026-11-20, on the live server, before any money data.
 | F3  | Transaction text goes to the Claude API                    | Totals by default. The import masks account numbers.       | LUNA  |
 | F4  | A stolen API key can spend without a limit                 | Set a monthly spend limit in a LUNA-only workspace          | Coops |
 | F5  | The VPS disk is not encrypted                              | Raw exports go to an inbox outside git. The hub refuses them. The import deletes them. | LUNA |
-| F6  | The memory has no backup                                   | An hourly pull to the encrypted laptop (=home/luna.nix=)    | LUNA  |
+| F6  | The memory has no backup                                   | A sync every 10 minutes to the encrypted laptop (=home/luna.nix=) | LUNA  |
 | F7  | Updates depend on memory                                   | The brief warns when nixpkgs is older than 14 days          | LUNA  |
 | F8  | A Tailscale control plane compromise can add a node        | Enable Tailnet Lock with keys on the laptop and the phone   | Coops |
 | F9  | Account takeover                                           | TOTP or a passkey on Vultr, Tailscale, the Claude Console and the git host. The nyx remote is private. | Coops |
@@ -9056,7 +9056,7 @@ LUNA does not need the SQLite database of org-roam. The core reads the files.
 |------+----------------------------------------------------------------------+-------|
 | M1   | The roam engine and the memory tools in the core. The graph in the core API. | Done |
 | M2   | The Memory panel: the force graph and the mind map                    | Done  |
-| M3   | Move the notes of Coops to =roam/=. Point Emacs at the clone of the hub. Coops does this. | Next |
+| M3   | Move the notes of Coops to =roam/=. Point Emacs at the clone of the hub. Sync roam/ both ways (=home/luna.nix=). | Done |
 | M4   | An overnight job: the conversations of the day become notes and links (backlog #9) | |
 | M5   | Semantic recall with a local embedding model (backlog #24)            |       |
 
@@ -10487,9 +10487,11 @@ defmodule LunaWeb.Endpoint do
   # The owner check comes before the static files, as in the Python app.
   plug LunaWeb.Owner
 
-  plug Plug.Static, at: "/", from: :luna_web, only: ~w(app.js app.css mic-worklet.js)
-  plug Plug.Static, at: "/vendor", from: {:phoenix, "priv/static"}, only: ~w(phoenix.min.js)
-  plug Plug.Static, at: "/vendor", from: {:phoenix_live_view, "priv/static"}, only: ~w(phoenix_live_view.min.js)
+  # "no-cache": the browser keeps a file, but asks luna each time (the ETag
+  # gives a short 304). Without it, a browser can use an old app.js after a deploy.
+  plug Plug.Static, at: "/", from: :luna_web, only: ~w(app.js app.css mic-worklet.js), cache_control_for_etags: "no-cache"
+  plug Plug.Static, at: "/vendor", from: {:phoenix, "priv/static"}, only: ~w(phoenix.min.js), cache_control_for_etags: "no-cache"
+  plug Plug.Static, at: "/vendor", from: {:phoenix_live_view, "priv/static"}, only: ~w(phoenix_live_view.min.js), cache_control_for_etags: "no-cache"
 
   plug LunaWeb.Router
 end
@@ -12112,6 +12114,8 @@ defmodule LunaWeb.WebTest do
     assert get(build_conn(), "/app.js").status == 403
     conn = build_conn() |> put_req_header("tailscale-user-login", @owner) |> get("/app.js")
     assert conn.status == 200
+    # The browser must ask luna each time, so a deploy reaches the page.
+    assert get_resp_header(conn, "cache-control") == ["no-cache"]
   end
 
   test "the owner gets the page with the security headers" do
