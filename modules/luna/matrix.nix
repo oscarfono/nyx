@@ -58,8 +58,10 @@ in
     };
     script = ''
       ${config.services.tailscale.package}/bin/tailscale serve --bg --https=443 http://127.0.0.1:8008
-      # The LUNA web app. Refer to "Build: the web app".
-      ${config.services.tailscale.package}/bin/tailscale serve --bg --https=8443 http://127.0.0.1:8090
+      # The Phoenix app. Refer to "Build: the Phoenix app".
+      ${config.services.tailscale.package}/bin/tailscale serve --bg --https=8443 http://127.0.0.1:8091
+      # The Python app, until stage E2. Refer to "Ports during the move".
+      ${config.services.tailscale.package}/bin/tailscale serve --bg --https=8444 http://127.0.0.1:8090
     '';
   };
 

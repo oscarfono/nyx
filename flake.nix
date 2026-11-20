@@ -205,10 +205,17 @@
           # };
       };
 
-      # The LUNA agent. The check runs its tests.
-      packages.${system}.luna-core =
-        nixpkgs.legacyPackages.${system}.callPackage ./pkgs/luna-core { };
-      checks.${system}.luna-core = self.packages.${system}.luna-core;
+      # The LUNA packages. Each check runs the tests of its package.
+      #   luna-core  the agent, in Python
+      #   luna-web   the web app, in Phoenix. Its tests use a PostgreSQL
+      #              server in the build directory.
+      packages.${system} = {
+        luna-core = nixpkgs.legacyPackages.${system}.callPackage ./pkgs/luna-core { };
+        luna-web = nixpkgs.legacyPackages.${system}.callPackage ./pkgs/luna-web { };
+      };
+      checks.${system} = {
+        inherit (self.packages.${system}) luna-core luna-web;
+      };
 
       formatter.${system} = nixpkgs.legacyPackages.${system}.nixpkgs-fmt;
 

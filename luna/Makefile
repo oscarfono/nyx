@@ -15,11 +15,11 @@ SSH_KEY   ?= $(HOME)/.ssh/luna_ed25519
 BOOTSTRAP := $(HOME)/.local/state/luna/bootstrap
 DEV       := nix develop $(FLAKE) --command
 
-.PHONY: help tangle check build install deploy host-key forget-host-key secrets matrix-users money-upload logs audit
+.PHONY: help tangle check build install deploy host-key forget-host-key secrets matrix-users money-upload logs web-logs web-lock web-vm-test audit
 
 help:
 	@echo "tangle           Make the build files from $(ORG)."
-	@echo "check            Run the luna-core tests. Evaluate the luna host."
+	@echo "check            Run the luna-core and luna-web tests. Evaluate the luna host."
 	@echo "build            Build the full luna system on this laptop."
 	@echo "host-key         Make the SSH host key for the install."
 	@echo "forget-host-key  Delete the local copy of the host key."
@@ -29,6 +29,9 @@ help:
 	@echo "deploy           Deploy the configuration over the tailnet."
 	@echo "money-upload     Send bank exports to the luna inbox. Set FILES."
 	@echo "logs             Show the luna-core log."
+	@echo "web-logs         Show the luna-web log."
+	@echo "web-lock         Write pkgs/luna-web/mix.lock again with mix deps.get."
+	@echo "web-vm-test      Run the luna-web VM test. The test needs KVM."
 	@echo "audit            Show the end of the audit log."
 
 tangle:
@@ -38,6 +41,7 @@ tangle:
 
 check:
 	nix build $(FLAKE)#luna-core --no-link --print-build-logs
+	nix build $(FLAKE)#luna-web --no-link --print-build-logs
 	nix eval --raw $(FLAKE)#nixosConfigurations.$(HOST).config.system.build.toplevel.drvPath
 	echo
 
@@ -88,6 +92,21 @@ money-upload:
 
 logs:
 	ssh root@$(HOST) journalctl -u luna-core -n 200 --no-pager
+
+web-logs:
+	ssh root@$(HOST) journalctl -u luna-web -n 200 --no-pager
+
+# Mix needs Hex. The nixpkgs Hex goes in MIX_PATH, so Mix does not download Hex.
+web-lock:
+	cd $(FLAKE)/pkgs/luna-web
+	hex="$$(nix eval --raw --inputs-from $(FLAKE) nixpkgs#beamPackages.hex.outPath)"
+	export MIX_PATH="$$(dirname "$$(find "$$hex" -name hex.app)")"
+	nix shell --inputs-from $(FLAKE) nixpkgs#beamPackages.elixir --command mix deps.get
+
+# The test file uses paths in this tree, so the build is impure.
+web-vm-test:
+	nix build --impure --no-link --print-build-logs --expr \
+	  '(builtins.getFlake "$(FLAKE)").inputs.nixpkgs.legacyPackages.x86_64-linux.callPackage $(abspath tests/web-vm.nix) { }'
 
 audit:
 	ssh root@$(HOST) tail -n 50 /var/lib/luna/audit/audit.jsonl

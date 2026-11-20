@@ -13,6 +13,7 @@ in
     ../../modules/luna/access.nix
     ../../modules/luna/matrix.nix
     ../../modules/luna/core.nix
+    ../../modules/luna/web.nix
   ];
 
   _module.args = { inherit site secretsReady; };

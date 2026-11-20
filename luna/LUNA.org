@@ -26,8 +26,10 @@ The next tangle overwrites the tangled files.
 | =hosts/luna/*.nix=   | The host: site values, system, disk  |
 | =modules/luna/*.nix= | Hardening, access, Matrix, the agent |
 | =pkgs/luna-core/=    | The agent package and its tests      |
+| =pkgs/luna-web/=     | The Phoenix web app and its tests    |
 | =luna/memory-seed/=  | The first memory files               |
 | =luna/tailscale/=    | The Tailscale policy                 |
+| =luna/tests/=        | The VM test of the web app           |
 | =luna/Makefile=      | The install and deploy commands      |
 
 Two nyx files are not tangled.
@@ -415,6 +417,9 @@ The Python core stays until the new core passes the same tests.
 | E4    | Task view (plan, tool calls, results) and fixed widgets                   | The core streams events to the page |
 | E5    | Port the core. Port the tests first.                                       | All core tests pass. Python retires. |
 
+The build of E1 is in [[*Build: the Phoenix app][Build: the Phoenix app]].
+E1 is done when the page loads on luna with the Tailscale login.
+
 ** Feature backlog
 
 These ideas come from a review of 15 assistant projects on 2026-11-20.
@@ -597,12 +602,16 @@ luna = mkHost {
 };
 #+end_src
 
-The package and the check:
+The packages and the checks:
 
 #+begin_src nix :tangle no
-packages.${system}.luna-core =
-  nixpkgs.legacyPackages.${system}.callPackage ./pkgs/luna-core { };
-checks.${system}.luna-core = self.packages.${system}.luna-core;
+packages.${system} = {
+  luna-core = nixpkgs.legacyPackages.${system}.callPackage ./pkgs/luna-core { };
+  luna-web = nixpkgs.legacyPackages.${system}.callPackage ./pkgs/luna-web { };
+};
+checks.${system} = {
+  inherit (self.packages.${system}) luna-core luna-web;
+};
 #+end_src
 
 The sops rule for the LUNA secrets.
@@ -642,6 +651,7 @@ in
     ../../modules/luna/access.nix
     ../../modules/luna/matrix.nix
     ../../modules/luna/core.nix
+    ../../modules/luna/web.nix
   ];
 
   _module.args = { inherit site secretsReady; };
@@ -944,8 +954,10 @@ in
     };
     script = ''
       ${config.services.tailscale.package}/bin/tailscale serve --bg --https=443 http://127.0.0.1:8008
-      # The LUNA web app. Refer to "Build: the web app".
-      ${config.services.tailscale.package}/bin/tailscale serve --bg --https=8443 http://127.0.0.1:8090
+      # The Phoenix app. Refer to "Build: the Phoenix app".
+      ${config.services.tailscale.package}/bin/tailscale serve --bg --https=8443 http://127.0.0.1:8091
+      # The Python app, until stage E2. Refer to "Ports during the move".
+      ${config.services.tailscale.package}/bin/tailscale serve --bg --https=8444 http://127.0.0.1:8090
     '';
   };
 
@@ -1112,7 +1124,8 @@ in
       LUNA_MONEY = if site.money then "1" else "0";
       LUNA_WISE = builtins.toJSON site.wise;
       LUNA_OWNER_LOGIN = site.ownerLogin;
-      LUNA_WEB_ORIGIN = "https://${fqdn}:8443";
+      # Port 8444 until stage E2. Refer to "Ports during the move".
+      LUNA_WEB_ORIGIN = "https://${fqdn}:8444";
       LUNA_WEB_PORT = "8090";
       GIT_AUTHOR_NAME = "LUNA";
       GIT_AUTHOR_EMAIL = "luna@${fqdn}";
@@ -4102,7 +4115,9 @@ def test_reference_is_cleaned():
 
 * Build: the web app
 
-The web app is at =https://luna.<tailnet>:8443=.
+This is the Python web app.
+The web app is at =https://luna.<tailnet>:8444= until stage E2.
+The Phoenix app has port 8443. Refer to [[*Ports during the move][Ports during the move]].
 =tailscale serve= publishes the app on the tailnet only.
 The app has four panels: Chat, Approvals, Money and System.
 Chat accepts a camera image with a message.
@@ -4696,6 +4711,854 @@ def test_system_panel(tmp_path):
     assert data["pending_approvals"] == 0 and "update" in data
 #+end_src
 
+* Build: the Phoenix app
+
+This section is stage E1 of [[*LUNA on Elixir][LUNA on Elixir]].
+The Phoenix app =luna-web= replaces the Python app at port 8443.
+In E1 the page shows the login, the live socket and the database.
+The panels come in stage E2.
+
+** Ports during the move
+
+The Python app stays in service until E2 is done.
+=tailscale serve= publishes the two apps on the tailnet.
+
+| Tailnet port | Local port      | App                          |
+|--------------+-----------------+------------------------------|
+| 443          | 127.0.0.1:8008  | Synapse                      |
+| 8443         | 127.0.0.1:8091  | =luna-web= (Phoenix)         |
+| 8444         | 127.0.0.1:8090  | The Python app, until E2     |
+
+The Python app gets the origin =https://luna.<tailnet>:8444=.
+Its origin check uses that value.
+
+** Login
+
+The login is the same as in the Python app.
+The plug =LunaWeb.Owner= accepts a request only when the header =Tailscale-User-Login= is the owner login.
+The plug comes before the static files, so each file needs the login.
+
+Phoenix sends a LiveView socket request to the socket before the endpoint plugs.
+Thus the plug cannot check the socket.
+The plug writes the login in the signed session cookie.
+At each mount, =on_mount/4= compares the session login with the owner login.
+=check_origin= refuses a socket from another origin.
+
+** Database and audit log
+
+PostgreSQL 18 listens on the unix socket =/run/postgresql= only.
+It has no TCP port.
+The only authentication rule is =peer=: the system user =luna_web= is the role =luna_web=.
+The app has no database password.
+
+The app runs the migrations at each start, before the endpoint accepts a request.
+The table =audit_events= holds the audit events of the app.
+A trigger refuses UPDATE, DELETE and TRUNCATE on that table.
+
+*CAUTION:* The trigger stops a fault in the app.
+It does not stop an attacker who has the role =luna_web=.
+The owner of a table can drop a trigger.
+
+** Secrets
+
+The app needs a secret key base and a release cookie.
+These values do not go in sops.
+The first start makes the two values with =openssl rand=.
+The two values stay in =/var/lib/luna-web=, mode 0700.
+To make new values, do these steps on luna:
+1. Delete =/var/lib/luna-web/secret_key_base= and =/var/lib/luna-web/cookie=.
+2. Run =systemctl restart luna-web=.
+A new secret key base stops each open session. Load the page again.
+
+The release has no Erlang distribution (=RELEASE_DISTRIBUTION=none=).
+Thus there is no =epmd= and no node port, and the cookie has no use on the network.
+
+** Dependencies
+
+=mix.lock= is not tangled. Mix writes it, as Nix writes =flake.lock=.
+=fetchMixDeps= gets the Hex packages in a fixed-output derivation.
+Each change to =mix.lock= changes the hash of that derivation.
+
+To change a dependency, do these steps:
+1. Edit =deps= in the Mix project below, then tangle.
+2. In =nyx/luna=, run =make web-lock=. Mix writes the new =mix.lock=.
+3. In the package below, set =hash = lib.fakeHash;=, then tangle.
+4. Run =make check=. The build fails and shows the correct hash after =got:=.
+5. Write that hash in the package. Tangle again.
+6. Run =make check=. The build must pass.
+
+No dependency is for one environment only.
+Then one hash serves the release and the tests.
+The tests do not use =Phoenix.LiveViewTest=, because it needs a test-only dependency.
+
+The page loads =phoenix.min.js= and =phoenix_live_view.min.js= from the Hex packages.
+There is no esbuild, no Tailwind and no npm.
+
+** Package
+
+=mixRelease= builds the release. The check phase runs the tests.
+The tests need PostgreSQL, so the check starts a server in the build directory.
+That server has a unix socket only.
+
+#+begin_src nix :tangle ../pkgs/luna-web/default.nix
+{ lib, beamPackages, postgresql_18 }:
+
+let
+  pname = "luna-web";
+  version = "0.1.0";
+  src = lib.fileset.toSource {
+    root = ./.;
+    fileset = lib.fileset.unions [ ./mix.exs ./mix.lock ./config ./lib ./priv ./test ];
+  };
+in
+beamPackages.mixRelease {
+  inherit pname version src;
+
+  # Change the hash after each change to mix.lock. Refer to "Dependencies"
+  # in luna/LUNA.org.
+  mixFodDeps = beamPackages.fetchMixDeps {
+    pname = "${pname}-deps";
+    inherit version src;
+    hash = "sha256-grka9MK6rgUdz6ma5LtsY/ZHipdqMdM1vaBuEHUedxk=";
+  };
+
+  # The tests need a PostgreSQL server. The check starts one in the build
+  # directory, with a unix socket only.
+  doCheck = true;
+  nativeCheckInputs = [ postgresql_18 ];
+  checkPhase = ''
+    runHook preCheck
+    export PGDATA=$TMPDIR/pg PGHOST=$TMPDIR/pgsock PGUSER=luna_test
+    mkdir -p $PGHOST
+    initdb -A trust -U $PGUSER >/dev/null
+    pg_ctl -w -o "-k $PGHOST -c listen_addresses=" -l $TMPDIR/pg.log start
+    MIX_ENV=test mix test --no-deps-check || { pg_ctl -m fast stop; exit 1; }
+    pg_ctl -m fast stop
+    runHook postCheck
+  '';
+
+  meta = {
+    description = "The LUNA web app, in Phoenix LiveView";
+    mainProgram = "luna_web";
+  };
+}
+#+end_src
+
+#+begin_src conf :tangle ../pkgs/luna-web/.gitignore
+/_build/
+/deps/
+#+end_src
+
+** Mix project
+
+#+begin_src elixir :tangle ../pkgs/luna-web/mix.exs
+defmodule LunaWeb.MixProject do
+  use Mix.Project
+
+  def project do
+    [
+      app: :luna_web,
+      version: "0.1.0",
+      elixir: "~> 1.18",
+      elixirc_paths: elixirc_paths(Mix.env()),
+      start_permanent: Mix.env() == :prod,
+      deps: deps(),
+      aliases: [test: ["ecto.create --quiet", "test"]],
+      releases: [luna_web: [include_executables_for: [:unix]]]
+    ]
+  end
+
+  def application do
+    [mod: {LunaWeb.Application, []}, extra_applications: [:logger]]
+  end
+
+  defp elixirc_paths(:test), do: ["lib", "test/support"]
+  defp elixirc_paths(_), do: ["lib"]
+
+  # No dependency is for one environment only. Then one fetchMixDeps hash
+  # serves the release and the tests.
+  defp deps do
+    [
+      {:bandit, "~> 1.15"},
+      {:ecto_sql, "~> 3.14"},
+      {:jason, "~> 1.4"},
+      {:phoenix, "~> 1.8"},
+      {:phoenix_html, "~> 4.4"},
+      {:phoenix_live_view, "~> 1.2"},
+      {:postgrex, "~> 0.22"}
+    ]
+  end
+end
+#+end_src
+
+** Configuration
+
+=config.exs= holds the values for each environment, and the test values.
+=runtime.exs= reads the values for luna from the environment of the systemd unit.
+
+#+begin_src elixir :tangle ../pkgs/luna-web/config/config.exs
+import Config
+
+config :luna_web, ecto_repos: [LunaWeb.Repo]
+
+config :luna_web, LunaWeb.Endpoint,
+  adapter: Bandit.PhoenixAdapter,
+  render_errors: [formats: [html: LunaWeb.ErrorHTML], layout: false],
+  pubsub_server: LunaWeb.PubSub,
+  live_view: [signing_salt: "luna-live"]
+
+config :phoenix, :json_library, Jason
+
+config :logger, :default_formatter, format: "[$level] $message\n"
+
+if config_env() == :test do
+  config :luna_web, :owner_login, "owner@example.com"
+
+  config :luna_web, LunaWeb.Endpoint,
+    url: [scheme: "https", host: "luna.example.ts.net", port: 8443],
+    check_origin: ["https://luna.example.ts.net:8443"],
+    secret_key_base: String.duplicate("test", 16),
+    server: false
+
+  # The check starts a PostgreSQL server in the build directory.
+  config :luna_web, LunaWeb.Repo,
+    socket_dir: System.get_env("PGHOST"),
+    username: System.get_env("PGUSER", "postgres"),
+    database: "luna_web_test",
+    pool: Ecto.Adapters.SQL.Sandbox
+
+  config :logger, level: :warning
+end
+#+end_src
+
+#+begin_src elixir :tangle ../pkgs/luna-web/config/runtime.exs
+import Config
+
+# The systemd unit sets these values. Refer to modules/luna/web.nix.
+if config_env() == :prod do
+  env = fn name ->
+    case System.get_env(name) do
+      value when value in [nil, ""] -> raise "LUNA: set the environment variable #{name}."
+      value -> value
+    end
+  end
+
+  origin = env.("LUNA_WEB_ORIGIN")
+  uri = URI.parse(origin)
+
+  config :luna_web, :owner_login, env.("LUNA_OWNER_LOGIN")
+
+  config :luna_web, LunaWeb.Endpoint,
+    server: true,
+    url: [scheme: uri.scheme, host: uri.host, port: uri.port],
+    http: [ip: {127, 0, 0, 1}, port: String.to_integer(env.("LUNA_WEB_PORT"))],
+    check_origin: [origin],
+    secret_key_base: env.("LUNA_WEB_SECRET_FILE") |> File.read!() |> String.trim()
+
+  config :luna_web, LunaWeb.Repo,
+    socket_dir: env.("LUNA_DB_SOCKET_DIR"),
+    username: env.("LUNA_DB_USER"),
+    database: env.("LUNA_DB_NAME"),
+    pool_size: 5
+end
+#+end_src
+
+** Application
+
+#+begin_src elixir :tangle ../pkgs/luna-web/lib/luna_web/application.ex
+defmodule LunaWeb.Application do
+  @moduledoc "Starts the database pool, the migrations and the web endpoint."
+  use Application
+
+  @impl true
+  def start(_type, _args) do
+    children = [
+      LunaWeb.Repo,
+      # Run the migrations before the endpoint accepts a request.
+      {Ecto.Migrator, repos: Application.fetch_env!(:luna_web, :ecto_repos)},
+      {Phoenix.PubSub, name: LunaWeb.PubSub},
+      LunaWeb.Endpoint
+    ]
+
+    Supervisor.start_link(children, strategy: :one_for_one, name: LunaWeb.Supervisor)
+  end
+end
+#+end_src
+
+#+begin_src elixir :tangle ../pkgs/luna-web/lib/luna_web/repo.ex
+defmodule LunaWeb.Repo do
+  @moduledoc "The PostgreSQL database. The connection uses the unix socket and peer authentication."
+  use Ecto.Repo, otp_app: :luna_web, adapter: Ecto.Adapters.Postgres
+end
+#+end_src
+
+** Audit log
+
+#+begin_src elixir :tangle ../pkgs/luna-web/lib/luna_web/audit.ex
+defmodule LunaWeb.Audit do
+  @moduledoc """
+  Writes events to the table audit_events.
+  A trigger in the database refuses UPDATE, DELETE and TRUNCATE on that table.
+  """
+  require Logger
+
+  @doc "Writes one event. A database fault goes to the log. The request continues."
+  def write(event, data \\ %{}) when is_binary(event) and is_map(data) do
+    LunaWeb.Repo.query!("INSERT INTO audit_events (event, data) VALUES ($1, $2)", [event, data])
+    :ok
+  rescue
+    error ->
+      Logger.error("LUNA: the audit log did not write #{event}: #{Exception.message(error)}")
+      :error
+  end
+end
+#+end_src
+
+#+begin_src elixir :tangle ../pkgs/luna-web/priv/repo/migrations/20261120000000_create_audit_events.exs
+defmodule LunaWeb.Repo.Migrations.CreateAuditEvents do
+  use Ecto.Migration
+
+  # The trigger stops a fault in the app. It does not stop an attacker who
+  # has the role luna_web, because the owner of a table can drop a trigger.
+  def up do
+    execute """
+    CREATE TABLE audit_events (
+      id bigserial PRIMARY KEY,
+      time timestamptz NOT NULL DEFAULT now(),
+      event text NOT NULL,
+      data jsonb NOT NULL DEFAULT '{}'
+    )
+    """
+
+    execute """
+    CREATE FUNCTION audit_events_refuse() RETURNS trigger LANGUAGE plpgsql AS $$
+    BEGIN
+      RAISE EXCEPTION 'LUNA: the audit log refuses %', TG_OP;
+    END
+    $$
+    """
+
+    execute """
+    CREATE TRIGGER audit_events_no_change BEFORE UPDATE OR DELETE ON audit_events
+    FOR EACH ROW EXECUTE FUNCTION audit_events_refuse()
+    """
+
+    execute """
+    CREATE TRIGGER audit_events_no_truncate BEFORE TRUNCATE ON audit_events
+    FOR EACH STATEMENT EXECUTE FUNCTION audit_events_refuse()
+    """
+  end
+
+  def down do
+    raise "LUNA: the audit log has no down migration."
+  end
+end
+#+end_src
+
+** Owner check
+
+#+begin_src elixir :tangle ../pkgs/luna-web/lib/luna_web/owner.ex
+defmodule LunaWeb.Owner do
+  @moduledoc """
+  Accepts a request only from the owner login.
+
+  tailscale serve adds the header Tailscale-User-Login to each request from
+  a tailnet user. The endpoint listens on 127.0.0.1 only, so a request from
+  outside luna cannot set the header.
+
+  The LiveView socket does not go through this plug. The plug writes the
+  login in the signed session, and on_mount/4 compares the session login
+  with the owner login.
+  """
+  import Plug.Conn
+
+  @header "tailscale-user-login"
+  @session_key "owner_login"
+
+  def init(opts), do: opts
+
+  def call(conn, _opts) do
+    owner = owner_login()
+
+    case get_req_header(conn, @header) do
+      [^owner] ->
+        conn
+        |> fetch_session()
+        |> put_session(@session_key, owner)
+        |> assign(:owner_login, owner)
+
+      _ ->
+        LunaWeb.Audit.write("web.refused", %{"reason" => "login", "path" => conn.request_path})
+
+        conn
+        |> put_resp_content_type("text/plain")
+        |> send_resp(403, "LUNA: this page is for the owner only.")
+        |> halt()
+    end
+  end
+
+  def on_mount(:owner, _params, session, socket) do
+    owner = owner_login()
+
+    case session do
+      %{@session_key => ^owner} ->
+        {:cont, Phoenix.Component.assign(socket, :owner_login, owner)}
+
+      _ ->
+        LunaWeb.Audit.write("web.refused", %{"reason" => "session", "path" => "/live"})
+        {:halt, Phoenix.LiveView.redirect(socket, to: "/")}
+    end
+  end
+
+  # An empty owner login would accept an empty header. Refuse to start.
+  defp owner_login do
+    case Application.fetch_env!(:luna_web, :owner_login) do
+      login when is_binary(login) and login != "" -> login
+      _ -> raise "LUNA: the owner login is empty."
+    end
+  end
+end
+#+end_src
+
+** Endpoint and router
+
+#+begin_src elixir :tangle ../pkgs/luna-web/lib/luna_web/endpoint.ex
+defmodule LunaWeb.Endpoint do
+  use Phoenix.Endpoint, otp_app: :luna_web
+
+  # tailscale serve gives HTTPS to the browser, so the cookie can be secure.
+  @session_options [
+    store: :cookie,
+    key: "_luna_web",
+    signing_salt: "luna-session",
+    same_site: "Strict",
+    secure: true,
+    http_only: true
+  ]
+
+  # Phoenix dispatches the socket before the plugs below.
+  # LunaWeb.Owner.on_mount/4 checks the owner. check_origin checks the origin.
+  socket "/live", Phoenix.LiveView.Socket,
+    websocket: [connect_info: [session: @session_options]],
+    longpoll: false
+
+  plug Plug.RequestId
+  plug Plug.Head
+  plug Plug.Session, @session_options
+  # The owner check comes before the static files, as in the Python app.
+  plug LunaWeb.Owner
+
+  plug Plug.Static, at: "/", from: :luna_web, only: ~w(app.js app.css)
+  plug Plug.Static, at: "/vendor", from: {:phoenix, "priv/static"}, only: ~w(phoenix.min.js)
+  plug Plug.Static, at: "/vendor", from: {:phoenix_live_view, "priv/static"}, only: ~w(phoenix_live_view.min.js)
+
+  plug LunaWeb.Router
+end
+#+end_src
+
+#+begin_src elixir :tangle ../pkgs/luna-web/lib/luna_web/router.ex
+defmodule LunaWeb.Router do
+  use Phoenix.Router
+  import Plug.Conn
+  import Phoenix.Controller
+  import Phoenix.LiveView.Router
+
+  # The same policy as the Python app. The page loads scripts from the app only.
+  @csp "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; " <>
+         "media-src 'self' blob:; connect-src 'self'; base-uri 'none'; form-action 'none'; " <>
+         "frame-ancestors 'none'"
+
+  pipeline :browser do
+    plug :accepts, ["html"]
+    plug :fetch_session
+    plug :put_root_layout, html: {LunaWeb.Layouts, :root}
+    plug :protect_from_forgery
+
+    plug :put_secure_browser_headers, %{
+      "content-security-policy" => @csp,
+      "referrer-policy" => "no-referrer",
+      "cache-control" => "no-store"
+    }
+  end
+
+  scope "/", LunaWeb do
+    pipe_through :browser
+
+    live_session :owner, on_mount: {LunaWeb.Owner, :owner} do
+      live "/", HomeLive
+    end
+  end
+end
+#+end_src
+
+#+begin_src elixir :tangle ../pkgs/luna-web/lib/luna_web/error_html.ex
+defmodule LunaWeb.ErrorHTML do
+  @moduledoc "Error pages as plain text. An error page shows no internal data."
+  def render(template, _assigns), do: Phoenix.Controller.status_message_from_template(template)
+end
+#+end_src
+
+** Page
+
+The page shows each value as text. HEEx escapes each value.
+
+#+begin_src elixir :tangle ../pkgs/luna-web/lib/luna_web/layouts.ex
+defmodule LunaWeb.Layouts do
+  @moduledoc "The root layout. The page loads no file from the internet."
+  use Phoenix.Component
+
+  def root(assigns) do
+    ~H"""
+    <!DOCTYPE html>
+    <html lang="en">
+      <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <meta name="csrf-token" content={Phoenix.Controller.get_csrf_token()} />
+        <title>LUNA</title>
+        <link rel="stylesheet" href="/app.css" />
+        <script defer src="/vendor/phoenix.min.js"></script>
+        <script defer src="/vendor/phoenix_live_view.min.js"></script>
+        <script defer src="/app.js"></script>
+      </head>
+      <body>
+        {@inner_content}
+      </body>
+    </html>
+    """
+  end
+end
+#+end_src
+
+#+begin_src elixir :tangle ../pkgs/luna-web/lib/luna_web/live/home_live.ex
+defmodule LunaWeb.HomeLive do
+  @moduledoc """
+  The stage E1 page. The page shows the login, the socket and the database.
+  The panels come in stage E2. Until then, the Python app is at port 8444.
+  """
+  use Phoenix.LiveView
+
+  @impl true
+  def mount(_params, _session, socket) do
+    if connected?(socket), do: LunaWeb.Audit.write("web.connect")
+    {:ok, assign(socket, connected: connected?(socket), database: database())}
+  end
+
+  @impl true
+  def render(assigns) do
+    ~H"""
+    <main>
+      <h1>LUNA</h1>
+      <dl>
+        <dt>Login</dt>
+        <dd>{@owner_login}</dd>
+        <dt>Live socket</dt>
+        <dd id="socket">{if @connected, do: "connected", else: "not connected"}</dd>
+        <dt>Database</dt>
+        <dd id="database">{@database}</dd>
+      </dl>
+      <p>This is stage E1. The panels come in stage E2.</p>
+      <p>The Python panels are at port 8444 until then.</p>
+    </main>
+    """
+  end
+
+  defp database do
+    case LunaWeb.Repo.query("SHOW server_version") do
+      {:ok, %{rows: [[version]]}} -> "PostgreSQL #{version}"
+      {:error, _} -> "not available"
+    end
+  end
+end
+#+end_src
+
+#+begin_src js :tangle ../pkgs/luna-web/priv/static/app.js
+// Connect the LiveView socket. phoenix.min.js and phoenix_live_view.min.js
+// load first and set the globals Phoenix and LiveView.
+(function () {
+  "use strict";
+  var token = document.querySelector("meta[name='csrf-token']").getAttribute("content");
+  var socket = new LiveView.LiveSocket("/live", Phoenix.Socket, { params: { _csrf_token: token } });
+  socket.connect();
+})();
+#+end_src
+
+#+begin_src css :tangle ../pkgs/luna-web/priv/static/app.css
+:root { color-scheme: light dark; --fg: #1d1d22; --bg: #f6f5f2; --muted: #6b6b75; }
+@media (prefers-color-scheme: dark) { :root { --fg: #e8e6e3; --bg: #15151a; --muted: #9a9aa5; } }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.5 system-ui, sans-serif; }
+main { max-width: 40rem; margin: 0 auto; padding: 2rem 1rem; }
+h1 { letter-spacing: 0.2em; font-weight: 600; }
+dl { display: grid; grid-template-columns: max-content 1fr; gap: 0.25rem 1rem; }
+dt { color: var(--muted); }
+dd { margin: 0; overflow-wrap: anywhere; }
+p { color: var(--muted); }
+#+end_src
+
+** Tests
+
+The tests run in the Nix build. =make check= runs the tests.
+Each test runs in a database transaction, and the transaction rolls back.
+
+#+begin_src elixir :tangle ../pkgs/luna-web/test/test_helper.exs
+ExUnit.start()
+Ecto.Adapters.SQL.Sandbox.mode(LunaWeb.Repo, :manual)
+#+end_src
+
+#+begin_src elixir :tangle ../pkgs/luna-web/test/support/case.ex
+defmodule LunaWeb.Case do
+  @moduledoc "Each test gets a database transaction. The transaction rolls back at the end."
+  use ExUnit.CaseTemplate
+
+  using do
+    quote do
+      import Plug.Conn
+      import Phoenix.ConnTest
+      @endpoint LunaWeb.Endpoint
+    end
+  end
+
+  setup do
+    :ok = Ecto.Adapters.SQL.Sandbox.checkout(LunaWeb.Repo)
+  end
+end
+#+end_src
+
+#+begin_src elixir :tangle ../pkgs/luna-web/test/web_test.exs
+defmodule LunaWeb.WebTest do
+  use LunaWeb.Case, async: true
+
+  @owner "owner@example.com"
+
+  defp audit_events do
+    %{rows: rows} = LunaWeb.Repo.query!("SELECT event, data FROM audit_events ORDER BY id")
+    rows
+  end
+
+  test "a request with no login gets 403 and an audit event" do
+    conn = get(build_conn(), "/")
+    assert conn.status == 403
+    assert audit_events() == [["web.refused", %{"reason" => "login", "path" => "/"}]]
+  end
+
+  test "a request with a different login gets 403" do
+    conn = build_conn() |> put_req_header("tailscale-user-login", "other@example.com") |> get("/")
+    assert conn.status == 403
+  end
+
+  test "a request with an empty login gets 403" do
+    conn = build_conn() |> put_req_header("tailscale-user-login", "") |> get("/")
+    assert conn.status == 403
+  end
+
+  test "the static files need the login" do
+    assert get(build_conn(), "/app.js").status == 403
+    conn = build_conn() |> put_req_header("tailscale-user-login", @owner) |> get("/app.js")
+    assert conn.status == 200
+  end
+
+  test "the owner gets the page with the security headers" do
+    conn = build_conn() |> put_req_header("tailscale-user-login", @owner) |> get("/")
+    body = html_response(conn, 200)
+    assert body =~ "LUNA"
+    assert body =~ @owner
+    assert body =~ "PostgreSQL"
+    [csp] = get_resp_header(conn, "content-security-policy")
+    assert csp =~ "script-src 'self'"
+    assert get_resp_header(conn, "x-content-type-options") == ["nosniff"]
+    assert get_resp_header(conn, "cache-control") == ["no-store"]
+  end
+
+  test "the LiveView mount refuses a session with no owner login" do
+    socket = %Phoenix.LiveView.Socket{}
+    assert {:halt, _} = LunaWeb.Owner.on_mount(:owner, %{}, %{}, socket)
+    assert {:halt, _} = LunaWeb.Owner.on_mount(:owner, %{}, %{"owner_login" => "x"}, socket)
+    assert {:cont, _} = LunaWeb.Owner.on_mount(:owner, %{}, %{"owner_login" => @owner}, socket)
+  end
+end
+#+end_src
+
+#+begin_src elixir :tangle ../pkgs/luna-web/test/audit_test.exs
+defmodule LunaWeb.AuditTest do
+  use LunaWeb.Case, async: true
+
+  alias LunaWeb.Repo
+
+  setup do
+    :ok = LunaWeb.Audit.write("test.event", %{"n" => 1})
+  end
+
+  test "the audit log refuses UPDATE" do
+    assert_raise Postgrex.Error, ~r/refuses UPDATE/, fn ->
+      Repo.query!("UPDATE audit_events SET event = 'changed'")
+    end
+  end
+
+  test "the audit log refuses DELETE" do
+    assert_raise Postgrex.Error, ~r/refuses DELETE/, fn ->
+      Repo.query!("DELETE FROM audit_events")
+    end
+  end
+
+  test "the audit log refuses TRUNCATE" do
+    assert_raise Postgrex.Error, ~r/refuses TRUNCATE/, fn ->
+      Repo.query!("TRUNCATE audit_events")
+    end
+  end
+end
+#+end_src
+
+** luna-web service
+
+The service runs as the system user =luna_web=, in the same systemd sandbox as =luna-core=.
+The service starts after =postgresql.target=.
+That target includes =postgresql-setup=, which makes the role and the database.
+
+#+begin_src nix :tangle ../modules/luna/web.nix
+{ config, lib, pkgs, hostName, site, ... }:
+let
+  luna-web = pkgs.callPackage ../../pkgs/luna-web { };
+  fqdn = "${hostName}.${site.tailnet}";
+  user = "luna_web";
+  stateDir = "/var/lib/luna-web";
+
+  # The secret key base and the release cookie stay on luna. The first start
+  # makes them. To make new ones, delete the files and restart the service.
+  start = pkgs.writeShellScript "luna-web-start" ''
+    set -euo pipefail
+    umask 077
+    for name in secret_key_base cookie; do
+      if [ ! -s "${stateDir}/$name" ]; then
+        ${pkgs.openssl}/bin/openssl rand -hex 48 > "${stateDir}/$name"
+      fi
+    done
+    RELEASE_COOKIE="$(cat ${stateDir}/cookie)"
+    export RELEASE_COOKIE
+    exec ${luna-web}/bin/luna_web start
+  '';
+in
+{
+  services.postgresql = {
+    enable = true;
+    package = pkgs.postgresql_18;
+    # The unix socket only. No TCP port.
+    settings.listen_addresses = lib.mkForce "";
+    # Peer authentication only: the system user name is the role name.
+    authentication = lib.mkForce ''
+      local all all peer
+    '';
+    ensureDatabases = [ user ];
+    ensureUsers = [ { name = user; ensureDBOwnership = true; } ];
+  };
+
+  users.groups.${user} = { };
+  users.users.${user} = {
+    isSystemUser = true;
+    group = user;
+    home = stateDir;
+  };
+
+  systemd.services.luna-web = {
+    description = "LUNA web app (Phoenix)";
+    # postgresql.target includes postgresql-setup, which makes the role.
+    after = [ "network.target" "postgresql.target" ];
+    requires = [ "postgresql.target" ];
+    wantedBy = [ "multi-user.target" ];
+    environment = {
+      LUNA_OWNER_LOGIN = site.ownerLogin;
+      LUNA_WEB_ORIGIN = "https://${fqdn}:8443";
+      LUNA_WEB_PORT = "8091";
+      LUNA_WEB_SECRET_FILE = "${stateDir}/secret_key_base";
+      LUNA_DB_SOCKET_DIR = "/run/postgresql";
+      LUNA_DB_USER = user;
+      LUNA_DB_NAME = user;
+      # No Erlang distribution: no epmd and no node port.
+      RELEASE_DISTRIBUTION = "none";
+      RELEASE_TMP = "/run/luna-web";
+    };
+    serviceConfig = {
+      ExecStart = start;
+      User = user;
+      Group = user;
+      StateDirectory = "luna-web";
+      StateDirectoryMode = "0700";
+      RuntimeDirectory = "luna-web";
+      RuntimeDirectoryMode = "0700";
+      Restart = "on-failure";
+      RestartSec = 10;
+
+      ProtectSystem = "strict";
+      ProtectHome = true;
+      PrivateTmp = true;
+      PrivateDevices = true;
+      NoNewPrivileges = true;
+      CapabilityBoundingSet = "";
+      ProtectKernelTunables = true;
+      ProtectKernelModules = true;
+      ProtectKernelLogs = true;
+      ProtectControlGroups = true;
+      ProtectClock = true;
+      ProtectHostname = true;
+      ProtectProc = "invisible";
+      RestrictAddressFamilies = [ "AF_INET" "AF_INET6" "AF_UNIX" ];
+      RestrictNamespaces = true;
+      RestrictRealtime = true;
+      RestrictSUIDSGID = true;
+      LockPersonality = true;
+      SystemCallArchitectures = "native";
+      SystemCallFilter = [ "@system-service" "~@privileged" ];
+    };
+  };
+}
+#+end_src
+
+** VM test
+
+The VM test starts =modules/luna/web.nix= in a QEMU virtual machine.
+The test needs KVM, so it is not a flake check.
+To run the test, run =make web-vm-test= in =nyx/luna=.
+
+The test makes sure that:
+- the app refuses a request with no login,
+- the owner gets the page, and the page shows PostgreSQL 18,
+- the owner gets the static files,
+- PostgreSQL and =epmd= have no TCP port,
+- the refusal is in the audit log, and the audit log refuses DELETE,
+- the service starts again after a restart.
+
+#+begin_src nix :tangle tests/web-vm.nix
+# The VM test of modules/luna/web.nix. Run it with: make web-vm-test
+{ testers }:
+
+testers.runNixOSTest {
+  name = "luna-web";
+  node.specialArgs = {
+    hostName = "luna";
+    site = { tailnet = "example.ts.net"; ownerLogin = "owner@example.com"; };
+  };
+  nodes.machine = { pkgs, ... }: {
+    imports = [ ../../modules/luna/web.nix ];
+    environment.systemPackages = [ pkgs.curl ];
+  };
+  testScript = ''
+    owner = "-H 'Tailscale-User-Login: owner@example.com'"
+    machine.wait_for_unit("luna-web.service")
+    machine.wait_for_open_port(8091)
+    machine.succeed("curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8091/ | grep -x 403")
+    page = machine.succeed(f"curl -sf {owner} http://127.0.0.1:8091/")
+    assert "owner@example.com" in page, page
+    assert "PostgreSQL 18" in page, page
+    machine.succeed(f"curl -sf {owner} http://127.0.0.1:8091/vendor/phoenix_live_view.min.js >/dev/null")
+    machine.fail("ss -ltn | grep -E ':(5432|4369) '")
+    events = machine.succeed("sudo -u luna_web psql -tA -c 'SELECT event FROM audit_events' luna_web")
+    assert "web.refused" in events, events
+    machine.fail("sudo -u luna_web psql -c 'DELETE FROM audit_events' luna_web")
+    machine.succeed("systemctl restart luna-web.service")
+    machine.wait_for_open_port(8091)
+  '';
+}
+#+end_src
+
 * Memory seed files
 
 LUNA copies these files to the memory on the first start.
@@ -4897,11 +5760,11 @@ SSH_KEY   ?= $(HOME)/.ssh/luna_ed25519
 BOOTSTRAP := $(HOME)/.local/state/luna/bootstrap
 DEV       := nix develop $(FLAKE) --command
 
-.PHONY: help tangle check build install deploy host-key forget-host-key secrets matrix-users money-upload logs audit
+.PHONY: help tangle check build install deploy host-key forget-host-key secrets matrix-users money-upload logs web-logs web-lock web-vm-test audit
 
 help:
 	@echo "tangle           Make the build files from $(ORG)."
-	@echo "check            Run the luna-core tests. Evaluate the luna host."
+	@echo "check            Run the luna-core and luna-web tests. Evaluate the luna host."
 	@echo "build            Build the full luna system on this laptop."
 	@echo "host-key         Make the SSH host key for the install."
 	@echo "forget-host-key  Delete the local copy of the host key."
@@ -4911,6 +5774,9 @@ help:
 	@echo "deploy           Deploy the configuration over the tailnet."
 	@echo "money-upload     Send bank exports to the luna inbox. Set FILES."
 	@echo "logs             Show the luna-core log."
+	@echo "web-logs         Show the luna-web log."
+	@echo "web-lock         Write pkgs/luna-web/mix.lock again with mix deps.get."
+	@echo "web-vm-test      Run the luna-web VM test. The test needs KVM."
 	@echo "audit            Show the end of the audit log."
 
 tangle:
@@ -4920,6 +5786,7 @@ tangle:
 
 check:
 	nix build $(FLAKE)#luna-core --no-link --print-build-logs
+	nix build $(FLAKE)#luna-web --no-link --print-build-logs
 	nix eval --raw $(FLAKE)#nixosConfigurations.$(HOST).config.system.build.toplevel.drvPath
 	echo
 
@@ -4970,6 +5837,21 @@ money-upload:
 
 logs:
 	ssh root@$(HOST) journalctl -u luna-core -n 200 --no-pager
+
+web-logs:
+	ssh root@$(HOST) journalctl -u luna-web -n 200 --no-pager
+
+# Mix needs Hex. The nixpkgs Hex goes in MIX_PATH, so Mix does not download Hex.
+web-lock:
+	cd $(FLAKE)/pkgs/luna-web
+	hex="$$(nix eval --raw --inputs-from $(FLAKE) nixpkgs#beamPackages.hex.outPath)"
+	export MIX_PATH="$$(dirname "$$(find "$$hex" -name hex.app)")"
+	nix shell --inputs-from $(FLAKE) nixpkgs#beamPackages.elixir --command mix deps.get
+
+# The test file uses paths in this tree, so the build is impure.
+web-vm-test:
+	nix build --impure --no-link --print-build-logs --expr \
+	  '(builtins.getFlake "$(FLAKE)").inputs.nixpkgs.legacyPackages.x86_64-linux.callPackage $(abspath tests/web-vm.nix) { }'
 
 audit:
 	ssh root@$(HOST) tail -n 50 /var/lib/luna/audit/audit.jsonl
