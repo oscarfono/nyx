@@ -1,0 +1,37 @@
+// Tailscale policy for the nyx tailnet. The source is luna/LUNA.org.
+{
+    // Only an admin (you) can tag a device as luna.
+    "tagOwners": {
+        "tag:luna": ["autogroup:admin"],
+    },
+
+    "grants": [
+        // Your devices can reach each other (laptop <-> phone).
+        {"src": ["autogroup:member"], "dst": ["autogroup:self"], "ip": ["*"]},
+
+        // Your devices can reach the VPS.
+        {"src": ["autogroup:member"], "dst": ["tag:luna"], "ip": ["*"]},
+
+        // Nothing lets tag:luna connect to your devices. If the VPS is
+        // compromised, it cannot reach the laptop or the phone.
+    ],
+
+    "ssh": [
+        // SSH between your own devices, with a re-login check.
+        {
+            "action": "check",
+            "src":    ["autogroup:member"],
+            "dst":    ["autogroup:self"],
+            "users":  ["autogroup:nonroot", "root"],
+        },
+        // SSH from your devices to the VPS, as root or coops. This is
+        // "accept", not "check", so make deploy does not stop for a
+        // browser login.
+        {
+            "action": "accept",
+            "src":    ["autogroup:member"],
+            "dst":    ["tag:luna"],
+            "users":  ["root", "coops"],
+        },
+    ],
+}

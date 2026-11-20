@@ -20,8 +20,8 @@
     pkiBundle = "/var/lib/sbctl";
   };
 
-  # Required for TPM2 unlock.
-  boot.initrd.systemd.enable = true;
+  # TPM2 unlock needs the systemd initrd. nixpkgs removed the scripted
+  # initrd, so the systemd initrd is the only initrd, and no option is needed.
 
   # LUKS lives in hardware-configuration.nix. To add TPM2 unlock, once:
   #   sudo systemd-cryptenroll --tpm2-device=auto \

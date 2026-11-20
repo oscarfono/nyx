@@ -1,0 +1,9 @@
+#+TITLE: Projects
+
+Rule: exactly one project has the stage SHIP.
+Score = (confidence × reach × 10) / (weeks to first payment + hours per week).
+
+| Project | Stage | Weeks to first payment | Confidence 1-5 | Reach 1-5 | Hours per week | Score |
+|---------+-------+------------------------+----------------+-----------+----------------+-------|
+|         | SHIP  |                        |                |           |                |       |
+|         | IDEA  |                        |                |           |                |       |

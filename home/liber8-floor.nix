@@ -33,7 +33,7 @@ let
   port = 4400;
   url = "http://localhost:${toString port}";
 
-  elixir = pkgs.elixir;
+  elixir = pkgs.beamPackages.elixir;
 
   # Every binary the unit may run, because a systemd unit's PATH is exactly
   # this list and nothing else. The first version of this file supplied

@@ -1,0 +1,16 @@
+#+TITLE: LUNA memory
+
+This directory is the memory of LUNA.
+LUNA and Coops both edit these files.
+Git records each change.
+
+| File          | Content                                     |
+|---------------+---------------------------------------------|
+| roster.org    | The FIFO swing dates for 12 months          |
+| money.org     | Annual costs, buckets and the spend plan    |
+| money/        | The hledger ledger                          |
+| travel.org    | Off-swing preferences and plans             |
+| projects.org  | The project portfolio and scores            |
+| inventory.org | Hardware parts                              |
+| notes.org     | General notes                               |
+| briefs/       | The morning briefs                          |

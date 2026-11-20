@@ -1,0 +1,37 @@
+#+TITLE: Money
+
+* Income
+| Source | Net per pay (AUD) | Pays per year | Net per year |
+|--------+-------------------+---------------+--------------|
+| FIFO   |                   |               |              |
+
+* Annual costs
+One row for each cost. LUNA finds costs in the bank exports that are not here.
+
+| Category  | Item            | Per year (AUD) | Due        | Bucket |
+|-----------+-----------------+----------------+------------+--------|
+| Housing   | Off-swing stays |                | Each swing | Bills  |
+| Transport | Flights         |                | Each swing | Bills  |
+| Phone     |                 |                | Monthly    | Bills  |
+| Insurance |                 |                |            | Bills  |
+
+* Buckets
+| Bucket | Account | Rule                                |
+|--------+---------+-------------------------------------|
+| Income |         | Pay lands here                      |
+| Bills  |         | Annual costs / pays per year        |
+| Buffer |         | Fill to three months of costs, then stop |
+| Spend  |         | Safe-to-spend × weeks per pay       |
+| Invest |         | All surplus after the buffer        |
+
+* Safe to spend
+spend per week = (net per year − annual costs − buffer per year − invest target) / 52
+
+* Investment plan
+Write the plan here before LUNA gives rebalance alerts.
+
+* Base or hotels
+| Option          | Nights per year | Cost per night | Cost per year |
+|-----------------+-----------------+----------------+---------------|
+| Hotels          |             182 |                |               |
+| A rented base   |             365 |                |               |

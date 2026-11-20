@@ -38,6 +38,18 @@
     lanzaboote = {
       url = "github:nix-community/lanzaboote/v1.1.0";
       inputs.nixpkgs.follows = "nixpkgs";
+      inputs.rust-overlay.follows = "rust-overlay";
+    };
+
+    # The Rust toolchain that lanzaboote builds its boot tools with.
+    #
+    # lanzaboote v1.1.0 pins rust-overlay from June 2026. That revision
+    # reads stdenv.isLinux and stdenv.isDarwin, and nixos-unstable marks
+    # both as deprecated, so each evaluation printed two warnings. A newer
+    # rust-overlay reads stdenv.hostPlatform instead.
+    rust-overlay = {
+      url = "github:oxalica/rust-overlay";
+      inputs.nixpkgs.follows = "nixpkgs";
     };
 
     # Caelestia, a Quickshell desktop shell. One process draws the bar, the
@@ -70,9 +82,7 @@
     # Declarative disk layout, and the tool nixos-anywhere partitions with.
     #
     # A VPS has no hardware to probe, so that host has no
-    # hardware-configuration.nix: hosts/vps/disko.nix IS that file. This is
-    # what makes the encryption part of the description rather than
-    # something done once by hand and remembered.
+    # hardware-configuration.nix: hosts/luna/disko.nix IS that file.
     #
     # CAUTION: adding an input means flake.lock has no revision for it until
     # `nix flake update` runs once on a machine with Nix. Until then the
@@ -154,22 +164,6 @@
         ./modules/security.nix
       ];
 
-      # The server set. A headless machine shares two of the desktop's
-      # modules — secrets, and the security posture — and drops the other
-      # eight, because every package a machine installs is surface it has to
-      # defend. The host file adds what is specific to it.
-      serverModules = [
-        ./modules/secrets.nix
-        ./modules/security.nix
-        ./modules/matrix.nix
-      ];
-
-      # The user layer for a headless box. home/default.nix is the desktop:
-      # shell, editor, theme, terminal, wallpaper. This is the agent, the
-      # floor, and the handful of things the agent's own tooling assumes.
-      serverHomeModules = [
-        ./home/server.nix
-      ];
     in
     {
         nixosConfigurations = {
@@ -181,26 +175,21 @@
             modules = desktopModules;
           };
 
-          # The server. Rented, and the machine that works — the agent, the
-          # hub, the floor, the night shift — while beta keeps the keys.
+          # LUNA, the personal assistant. A rented Vultr VPS.
+          #
+          # The design and the source of hosts/luna, modules/luna and
+          # pkgs/luna-core are in luna/LUNA.org. Edit the org file, then
+          # tangle. The install and deploy commands are in luna/Makefile.
           #
           # hardware = null, because a rented guest has no chassis to
-          # profile: the module list is
-          # `nixos.lib.optional (hardware != null) hardware`, so null simply
-          # drops it. That check is in this file, a few lines up.
-          #
-          # UNBUILT as of 19 November 2026. hosts/vps/README.md separates what
-          # was verified from source from what is still an assumption. The
-          # command that settles it:
-          #
-          #   nixos-rebuild build --flake ~/Projects/nyx#vps
-          vps = mkHost {
-            hostName = "vps";
+          # profile. The server has no home-manager modules, but
+          # home-manager needs a stateVersion.
+          luna = mkHost {
+            hostName = "luna";
             username = "coops";
             hardware = null;
-            hostPath = ./hosts/vps;
-            modules = serverModules;
-            homeModules = serverHomeModules;
+            hostPath = ./hosts/luna;
+            homeModules = [ { home.stateVersion = "26.05"; } ];
           };
 
           # Adding a machine looks like this. Copy hosts/t490 to hosts/<name>,
@@ -216,12 +205,21 @@
           # };
       };
 
+      # The LUNA agent. The check runs its tests.
+      packages.${system}.luna-core =
+        nixpkgs.legacyPackages.${system}.callPackage ./pkgs/luna-core { };
+      checks.${system}.luna-core = self.packages.${system}.luna-core;
+
       formatter.${system} = nixpkgs.legacyPackages.${system}.nixpkgs-fmt;
 
       devShells.${system}.default =
         let pkgs = nixpkgs.legacyPackages.${system};
         in pkgs.mkShell {
-          packages = with pkgs; [ nixpkgs-fmt statix deadnix sops age ssh-to-age ];
+          packages = with pkgs; [
+            nixpkgs-fmt statix deadnix sops age ssh-to-age
+            # LUNA install: luna/Makefile and luna/LUNA.org.
+            nixos-anywhere mkpasswd openssl hledger
+          ];
         };
     };
 }

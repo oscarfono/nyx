@@ -71,6 +71,14 @@
         addKeysToAgent = "yes";
       };
 
+      # The LUNA VPS, over the tailnet. See luna/LUNA.org.
+      "luna" = {
+        hostname = "luna.bumblebee-tuatara.ts.net";
+        identityFile = "~/.ssh/luna_ed25519";
+        identitiesOnly = true;
+        addKeysToAgent = "yes";
+      };
+
       "*" = {
         # Keys join the agent on first use rather than at login, so nothing
         # prompts for a key you may not touch today.

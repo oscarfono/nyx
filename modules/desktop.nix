@@ -36,7 +36,9 @@ in
     "boot.shell_on_fail"        # keep an escape hatch when something breaks
   ];
   boot.consoleLogLevel = 0;
-  boot.initrd.verbose = false;
+  # boot.initrd.verbose is gone: it applied to the scripted stage 1 only,
+  # and nixpkgs removed the scripted stage 1. The kernel parameters above
+  # keep the systemd initrd quiet.
   boot.loader.timeout = 0;      # hold SPACE at boot to get the menu back
 
   # ---------------------------------------------------------------------

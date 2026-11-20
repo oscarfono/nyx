@@ -11,8 +11,17 @@
 keys:
   - &beta age1tdjjl0sd3326qrx2u58a77wy6g060z0xqj3gyenefyrfadjkgpzs3866fm
   - &coops age1rru3fcx8xa07z09grvx3dvgxfhxkhp4nmpg397uxj9vwknqwesmqq3fwvq
+  # The LUNA VPS host key. `make host-key` in luna/ prints it.
+  - &luna age15cjxnjrvt6l04dna9l2j25qfprfgwcxn3yds83uvjzwec3czefmsnmlx9n
 
 creation_rules:
+  # The LUNA secrets. This rule must come first: sops uses the first match.
+  # beta cannot read these secrets, and luna cannot read secrets.yaml.
+  - path_regex: secrets/luna\.yaml$
+    key_groups:
+      - age:
+          - *coops
+          - *luna
   - path_regex: secrets/[^/]+\.yaml$
     key_groups:
       - age:

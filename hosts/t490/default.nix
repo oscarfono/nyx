@@ -15,6 +15,7 @@
     ../../modules/proton.nix
     ../../modules/gaming.nix
     ../../modules/backup.nix
+    ../../modules/tailscale.nix
   ];
 
 

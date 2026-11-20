@@ -1,0 +1,10 @@
+#+TITLE: Travel
+
+* Preferences
+- Price per night (AUD): less than
+- Must have: clean, comfortable, a kitchen, fast Wi-Fi
+- Good to have: a gym near, quiet, walkable, interesting
+- Start airport: the site airport for each swing
+- Maximum flight time:
+
+* Off-swing plans
