@@ -71,7 +71,7 @@
         addKeysToAgent = "yes";
       };
 
-      # The LUNA VPS, over the tailnet. See luna/LUNA.org.
+      # The LUNA VPS, over the tailnet. LUNA has her own repository: ~/Projects/LUNA.
       "luna" = {
         hostname = "luna.bumblebee-tuatara.ts.net";
         identityFile = "~/.ssh/luna_ed25519";

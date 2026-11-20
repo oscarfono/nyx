@@ -13,7 +13,8 @@
     ./tools.nix
     ./theme.nix
     ./agents.nix
-    ./luna.nix
+    # The memory sync of LUNA comes from the LUNA flake.
+    inputs.luna.homeManagerModules.memory-sync
     ./treesitter.nix
     ./languages.nix
     ./dictation.nix

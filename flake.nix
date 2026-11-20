@@ -79,17 +79,21 @@
     # the upstream lock.
     hermes-agent.url = "github:NousResearch/hermes-agent/v0.23.1";
 
-    # Declarative disk layout, and the tool nixos-anywhere partitions with.
+    # LUNA, the private assistant, has her own flake. nyx uses one part:
+    # the home-manager module that syncs the memory hub on this laptop.
     #
-    # A VPS has no hardware to probe, so that host has no
-    # hardware-configuration.nix: hosts/luna/disko.nix IS that file.
+    # The input is a local path because LUNA has no remote yet. When the
+    # LUNA repository has a remote, change the URL to that remote.
     #
-    # CAUTION: adding an input means flake.lock has no revision for it until
-    # `nix flake update` runs once on a machine with Nix. Until then the
-    # flake does not evaluate and the error names `disko`.
-    disko = {
-      url = "github:nix-community/disko/master";
+    # The follows lines stop a second copy of each input in the lock.
+    luna = {
+      url = "git+file:///home/coops/Projects/LUNA";
       inputs.nixpkgs.follows = "nixpkgs";
+      inputs.home-manager.follows = "home-manager";
+      inputs.sops-nix.follows = "sops-nix";
+      inputs.nix-index-database.follows = "nix-index-database";
+      inputs.lanzaboote.follows = "lanzaboote";
+      inputs.rust-overlay.follows = "rust-overlay";
     };
     };
 
@@ -175,23 +179,6 @@
             modules = desktopModules;
           };
 
-          # LUNA, the personal assistant. A rented Vultr VPS.
-          #
-          # The design and the source of hosts/luna, modules/luna and
-          # pkgs/luna-core are in luna/LUNA.org. Edit the org file, then
-          # tangle. The install and deploy commands are in luna/Makefile.
-          #
-          # hardware = null, because a rented guest has no chassis to
-          # profile. The server has no home-manager modules, but
-          # home-manager needs a stateVersion.
-          luna = mkHost {
-            hostName = "luna";
-            username = "coops";
-            hardware = null;
-            hostPath = ./hosts/luna;
-            homeModules = [ { home.stateVersion = "26.05"; } ];
-          };
-
           # Adding a machine looks like this. Copy hosts/t490 to hosts/<name>,
           # regenerate hardware-configuration.nix on that machine, and drop or
           # add modules to taste.
@@ -205,21 +192,6 @@
           # };
       };
 
-      # The LUNA packages. Each check runs the tests of its package.
-      #   luna-core  the agent, in Python
-      #   luna-web   the web app, in Phoenix. Its tests use a PostgreSQL
-      #              server in the build directory.
-      #   luna-core-ex  the core, in Elixir (stage E5). It replaces
-      #              luna-core at the cutover.
-      packages.${system} = {
-        luna-core = nixpkgs.legacyPackages.${system}.callPackage ./pkgs/luna-core { };
-        luna-web = nixpkgs.legacyPackages.${system}.callPackage ./pkgs/luna-web { };
-        luna-core-ex = nixpkgs.legacyPackages.${system}.callPackage ./pkgs/luna-core-ex { };
-      };
-      checks.${system} = {
-        inherit (self.packages.${system}) luna-core luna-web luna-core-ex;
-      };
-
       formatter.${system} = nixpkgs.legacyPackages.${system}.nixpkgs-fmt;
 
       devShells.${system}.default =
@@ -227,8 +199,6 @@
         in pkgs.mkShell {
           packages = with pkgs; [
             nixpkgs-fmt statix deadnix sops age ssh-to-age
-            # LUNA install: luna/Makefile and luna/LUNA.org.
-            nixos-anywhere mkpasswd openssl hledger
           ];
         };
     };

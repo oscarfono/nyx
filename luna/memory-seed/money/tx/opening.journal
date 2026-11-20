@@ -1,6 +1,0 @@
-; Opening balances. Write one entry for each balance that has no bank export.
-; Example (Afterpay owes money, so the liability is negative):
-;
-; 2026-12-01 Opening balance Afterpay
-;     liabilities:afterpay   AUD -0.00
-;     equity:opening

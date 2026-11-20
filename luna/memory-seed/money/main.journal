@@ -1,6 +1,0 @@
-; LUNA money ledger, in hledger format. Amounts carry a currency code.
-; LUNA writes tx/<year>.journal. Do not edit those files by hand.
-; Edit accounts.journal, tx/opening.journal and categories.org.
-; Run: hledger -f money/main.journal balance
-include accounts.journal
-include tx/*.journal

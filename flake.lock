@@ -65,6 +65,7 @@
     "disko": {
       "inputs": {
         "nixpkgs": [
+          "luna",
           "nixpkgs"
         ]
       },
@@ -231,6 +232,42 @@
         "ref": "v1.1.0",
         "repo": "lanzaboote",
         "type": "github"
+      }
+    },
+    "luna": {
+      "inputs": {
+        "disko": "disko",
+        "home-manager": [
+          "home-manager"
+        ],
+        "lanzaboote": [
+          "lanzaboote"
+        ],
+        "nix-index-database": [
+          "nix-index-database"
+        ],
+        "nixpkgs": [
+          "nixpkgs"
+        ],
+        "rust-overlay": [
+          "rust-overlay"
+        ],
+        "sops-nix": [
+          "sops-nix"
+        ]
+      },
+      "locked": {
+        "lastModified": 1795208109,
+        "narHash": "sha256-hhr3bO5/IMD/S46bkTJJOA4QESOg94Dqtj1dvhTpu3E=",
+        "ref": "refs/heads/master",
+        "rev": "7a1e929acfd7d4260aaa0e29bab274dc53d5c875",
+        "revCount": 25,
+        "type": "git",
+        "url": "file:///home/coops/Projects/LUNA"
+      },
+      "original": {
+        "type": "git",
+        "url": "file:///home/coops/Projects/LUNA"
       }
     },
     "m3shapes": {
@@ -436,10 +473,10 @@
     "root": {
       "inputs": {
         "caelestia": "caelestia",
-        "disko": "disko",
         "hermes-agent": "hermes-agent",
         "home-manager": "home-manager_2",
         "lanzaboote": "lanzaboote",
+        "luna": "luna",
         "nix-index-database": "nix-index-database",
         "nixos-hardware": "nixos-hardware",
         "nixpkgs": "nixpkgs_3",

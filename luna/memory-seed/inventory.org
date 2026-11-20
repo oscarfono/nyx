@@ -1,4 +1,0 @@
-#+TITLE: Inventory
-
-| Part | Value | Package | Quantity | Location | Supplier | Supplier part |
-|------+-------+---------+----------+----------+----------+---------------|
