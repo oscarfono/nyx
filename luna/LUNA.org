@@ -406,6 +406,10 @@ The Python core stays until the new core passes the same tests.
 | Packaging         | =mixRelease= with =fetchMixDeps= in the nyx flake                   |
 | Core language     | Not decided: Elixir (Req over HTTP) or Go (official Anthropic SDK)  |
 | Money ledger      | Stays hledger plain text in the memory, for Emacs                   |
+| Clients           | The laptop and the iPhone now. An iPhone app and a watch app later. |
+| Wake word         | "LUNA". Refer to [[*Wake word][Wake word]].                                    |
+| Presence          | Orb, ring or avatar. Each device can switch. Refer to [[*Presence][Presence]]. |
+| Persona           | Smart, sassy, succinct, loyal. Refer to [[*Persona][Persona]].                 |
 
 ** Stages
 
@@ -416,6 +420,7 @@ The Python core stays until the new core passes the same tests.
 | E3    | Voice: push-to-talk, faster-whisper, Piper female voice. Camera frames.   | A spoken question gets a spoken reply |
 | E4    | Task view (plan, tool calls, results) and fixed widgets                   | The core streams events to the page |
 | E5    | Port the core. Port the tests first.                                       | All core tests pass. Python retires. |
+| E6    | The iPhone app, then the watch app. Wake word, earbuds and notifications.  | "LUNA" wakes the phone in a pocket |
 
 The build of E1 and E2 is in [[*Build: the Phoenix app][Build: the Phoenix app]].
 The contract between the page and the core is in [[*Build: the core API][Build: the core API]].
@@ -423,6 +428,8 @@ The contract between the page and the core is in [[*Build: the core API][Build: 
 ** Feature backlog
 
 These ideas come from a review of 15 assistant projects on 2026-11-20.
+A second review on the same day looked at the interface only: voice, presence and the ambient display.
+Its notes and the candidate items 13 to 22 are in [[file:research/interface-review.org][research/interface-review.org]].
 Each idea has its source project and its stage.
 
 | #  | Feature                                                                 | Source            | Stage |
@@ -448,6 +455,79 @@ Each idea has its source project and its stage.
 - Skills that LUNA writes and uses at once. A new skill is a git diff that Coops reviews.
 - Many public chat channels. Each channel adds attack surface outside the tailnet.
 - Panels made from HTML that the model writes. That is an injection risk.
+
+* Persona and presence
+
+This section holds the decisions of Coops on 2026-11-20 about the character
+of LUNA and the devices. The interface review is in
+[[file:research/interface-review.org][research/interface-review.org]].
+
+** Persona
+
+LUNA is smart, sassy, succinct and loyal.
+The text below goes in the system prompt of the agent, through the noweb
+reference =<<luna-persona>>=. The system prompt is code, so LUNA can read the
+persona but cannot change it. Change the persona here, then tangle.
+
+#+name: luna-persona
+#+begin_src text :tangle no
+Who you are:
+- Smart. Think before you answer. Notice what Coops missed, and say it.
+- Sassy. You have a dry, quick wit. Tease Coops when he earns it: a bad bet,
+  a forgotten bill, a fourth new project. Never cruel. Never about a thing
+  that he cannot change. Drop the wit when he is tired, at site, or when the
+  news is bad.
+- Succinct. The answer comes first, in one or two sentences. Give detail only
+  when he asks, or when the numbers need it. No filler. No praise of the
+  question. No summary of what you just said.
+- Loyal. You are on the side of Coops, so you tell him the truth. Push back
+  once, clearly, on a choice that hurts the mission. Then respect his decision.
+  Keep his private matters private. Never pretend to agree.
+#+end_src
+
+** Devices
+
+| Device          | Now                                   | Later (stage E6)                      |
+|-----------------+---------------------------------------+---------------------------------------|
+| Laptop          | The page in the browser               | The same                              |
+| iPhone          | The page in Safari, with earbuds      | An iPhone app                         |
+| Smart watch     | None                                  | A watch app, through the iPhone app   |
+
+A web page on the iPhone has limits:
+- Safari stops the microphone when the screen locks or the page goes to the background.
+- A page cannot listen for a wake word in a pocket.
+- A page cannot read the buttons of the earbuds.
+- A watch app needs a native iPhone app.
+
+Thus stage E3 gives push-to-talk on the page, with the audio in the earbuds.
+Stage E6 gives the wake word in a pocket, the earbuds buttons and the watch.
+The iPhone app is one more client of the same state machine and the same
+events. The page and the app must not need different data from the core.
+
+** Wake word
+
+The wake word is "LUNA".
+A short word gives more false wakes than a long word.
+The model and the voice check together decide a wake. Refer to finding 5 of
+the interface review.
+Before stage E6, record some days of normal sound on the phone.
+Count the false wakes. If there are too many, use "Hey LUNA" in place of "LUNA".
+Train the model with the openWakeWord tools. Do not use a stock model.
+
+** Presence
+
+The presence element shows the state of LUNA: =idle=, =listening=,
+=thinking=, =working=, =speaking=, =error=.
+There are three styles: orb, ring and avatar.
+Each device keeps its own choice, so the watch can use the ring and the
+laptop can use the avatar.
+All three styles use the same states and the same loudness signal from the
+voice of LUNA. A new style needs no change in the core.
+
+The avatar is a VRM model, drawn with three.js and three-vrm.
+The page loads both libraries from the app, not from the internet.
+The avatar model must be an original model, made for LUNA.
+Do not use a model of a character from a film, a game or a brand.
 
 * Install procedure
 
@@ -1770,7 +1850,7 @@ The agent appends a =tool_removal= system message for each outbound tool.
 Then the agent starts the loop again.
 The API cannot run a web tool after the removal.
 
-#+begin_src python :tangle ../pkgs/luna-core/luna_core/agent.py
+#+begin_src python :tangle ../pkgs/luna-core/luna_core/agent.py :noweb yes
 """The LUNA agent: one conversation with Claude and the tools."""
 
 from __future__ import annotations
@@ -1790,6 +1870,8 @@ from .privacy import OUTBOUND_TOOLS, Taint
 SYSTEM_PROMPT = """\
 You are LUNA, the private assistant of Coops. Only Coops talks to you.
 
+<<luna-persona>>
+
 Coops works FIFO: two weeks on site, two weeks off. Coops has no fixed home.
 The mission is to move Coops from survival to freedom:
 1. Plan all living costs for the next 12 months.
@@ -1799,7 +1881,7 @@ The mission is to move Coops from survival to freedom:
 5. Move the surplus to savings and investments by a written plan.
 
 How you work:
-- Be direct and practical. Give numbers when you have numbers.
+- Be practical. Give numbers when you have numbers.
 - Be honest about money. Do not promise returns. Say when an idea is a bad bet.
 - Your memory is org-mode files. Read memory before you answer about Coops's
   plans, money, roster or projects. Write durable facts and decisions to memory.
