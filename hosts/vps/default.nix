@@ -32,19 +32,53 @@
   # The disk layout is this file's sibling.
   # =====================================================================
 
+  # =====================================================================
+  # GRUB, NOT systemd-boot, AND DELIBERATELY SO
+  # =====================================================================
+  # This was written for systemd-boot on the assumption the instance boots
+  # EFI. That assumption is not safe to ship: Vultr's own documentation for
+  # custom images says the image "must match the server configuration, either
+  # Legacy (BIOS) or UEFI", and at least one published Vultr + NixOS account
+  # reports UEFI/GPT not working there at all. A wrong guess is not subtle —
+  # the box does not come back and the fix is a console session and a
+  # re-install.
+  #
+  # So the config stops guessing. GRUB with efiSupport installs BOTH houses:
+  # its stage-1 goes into the MBR and the 1 MiB bios_grub partition (declared
+  # in the sibling disko.nix) for a BIOS boot, and into the ESP for a UEFI
+  # boot. One install, either firmware.
+  #
+  # canTouchEfiVariables is FALSE and efiInstallAsRemovable is TRUE, and they
+  # belong together: this guest's NVRAM is the provider's, and a boot entry
+  # written there may not persist or may not be writable at all. The removable
+  # path writes EFI/BOOT/BOOTX64.EFI instead, which is the location firmware is
+  # required to try first regardless of NVRAM — per NixOS's own option
+  # documentation, it is what you turn on when you want a disk that boots
+  # irrespective of the firmware's variable state.
+  #
+  # The one command that settles which mode this box is actually in, run on the
+  # stock image before anything is installed:
+  #
+  #     ls /sys/firmware/efi
+  #
+  # A listing means EFI, "No such file or directory" means BIOS. Either answer
+  # is now fine, which is the point — but it is worth knowing which one you got,
+  # because it decides whether /boot is being read from the ESP.
   boot.loader = {
-    systemd-boot.enable = lib.mkDefault true;
-    systemd-boot.configurationLimit = 10;
-    # On EFI hardware this is worth setting; on a guest whose firmware is
-    # managed by the provider it may fail harmlessly. Recorded, not asserted:
-    # if the install reports it could not touch EFI variables, set this to
-    # false and rebuild.
-    efi.canTouchEfiVariables = true;
-    grub.enable = false;
+    efi.canTouchEfiVariables = false;
+    grub = {
+      enable = true;
+      device = "/dev/vda";
+      efiSupport = true;
+      efiInstallAsRemovable = true;
+      useOSProber = false;
+    };
+    systemd-boot.enable = lib.mkForce false;
     # NOT lanzaboote. Secure Boot on a rented guest belongs to the provider's
     # firmware — our own keys cannot be enrolled in someone else's boot chain,
     # and the flake imports lanzaboote's module for every host. It stays
-    # disabled here, and its presence must not be read as protection.
+    # disabled here, and its presence must not be read as protection. GRUB does
+    # not change that.
   };
 
   # =====================================================================

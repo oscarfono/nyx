@@ -178,3 +178,65 @@ not cover this box yet. That is the change after this one.
 holds the company's API keys — which it does, as soon as the agent runs on it —
 the only copy of anything that decrypts the backups must be off it. That is
 policy 09's open question 1, and it is still open.
+
+## 20 November 2026 — the box is ordered, and the bootloader changed because of it
+
+The Director ordered **`vx1-g-4c-16g-240s` in Tokyo** (region `nrt`). Three things
+changed from the shape this directory was written against, and each is now reflected
+in the files.
+
+**1. VX1, and it is a better box for less money than the one we costed.** Vultr's own
+pricing page states VX1 uses **dedicated CPU resources** — not shared, which one
+third-party comparison site claims and is wrong — and lists 4 vCPU / 16 GB / **240 GB
+NVMe** at **$0.153/hour**, billed on actual hours and explicitly "not capped at 672
+hours", so a full 744-hour month is about **$113.83**. The General Purpose plan we had
+specified (`voc-g-4c-16gb-80s`, 4 vCPU / 16 GB / 80 GB) is **$120/month** on the same
+page. So the deliberate choice is: **cheaper, three times the disk, dedicated cores,
+newer silicon.** The 240 GB matters on its own — `/nix` plus a build cache plus the
+agent's working copies will eat an 80 GB disk, and the disk layout already takes
+`size = "100%"` so it needs no change.
+
+**2. Tokyo, not Singapore.** Region is a latency and jurisdiction choice for hardware,
+not identity: the Matrix `server_name` is `designandweb.ltd` and the machine is movable,
+so nothing in this directory depends on where the instance sits. Two honest notes. From
+Phuket, Tokyo is roughly 90–110 ms and Singapore roughly 25–40 ms, so Singapore is the
+snappier terminal — but Tokyo is comfortably workable and the mining clients are the
+other direction anyway, in Australia. And the region is not the jurisdiction question
+people assume: Vultr is a United States company, so its account data is exposed to
+United States process wherever the disk is racked.
+
+**3. The bootloader is no longer a guess.** `default.nix` was written for systemd-boot
+on EFI. Vultr's own custom-image documentation says the image must match "either Legacy
+(BIOS) or UEFI", and a published Vultr + NixOS account reports UEFI/GPT not being
+supported there at all. An install that guesses wrong does not come back. So the host
+now uses **GRUB with `efiSupport = true` and `efiInstallAsRemovable = true`**, which
+installs into the MBR and the bios_grub partition for BIOS *and* into the ESP for UEFI
+from one build command, and `disko.nix` now declares the 1 MiB `EF02` bios_grub
+partition that the BIOS path needs. The layout is disko's own `example/hybrid.nix`
+verbatim plus the LUKS wrapper. `efi.canTouchEfiVariables` is **false**: this guest's
+NVRAM belongs to the provider and a boot entry written there may not persist, which is
+exactly when GRUB's removable path is the right answer.
+
+**Still do this first, on the stock image, before anything is installed:**
+
+```sh
+ls /sys/firmware/efi       # a listing = EFI;  "No such file or directory" = BIOS
+lsblk                      # must name exactly ONE disk, and it must be /dev/vda
+```
+
+Either firmware answer is now safe. Knowing which one you got still matters, because it
+is what tells you whether `/boot` is being read from the ESP.
+
+**No custom ISO, and the question is closed.** Vultr does support uploading one (public
+URL, under 10 GB, two per account) — and the plan does not use it. The install is
+Debian from Vultr's own menu, then one `nixos-anywhere` run from the T490, which
+`kexec`s into a NixOS installer and partitions with disko. An ISO adds a boot-mode
+setting to get wrong and buys nothing.
+
+**What is still unverified, and it is the honest list:** neither file has been evaluated
+(`nixos-rebuild build --flake ~/Projects/nyx#vps` has not been run — there is no Nix in
+the agent's sandbox), the flake needs `nix flake update` first because the new `disko`
+input has no revision in `flake.lock`, the exact `nixos-anywhere` flag for supplying the
+LUKS passphrase is still to be read from `--help` on the machine that runs it, and the
+GRUB-hybrid layout is taken from disko's example rather than from a completed install on
+this box.

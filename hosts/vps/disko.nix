@@ -35,13 +35,34 @@
   disko.devices = {
     disk.main = {
       type = "disk";
-      # by-id, not /dev/vda. The kernel's name for the first virtio disk is
-      # almost always vda, but "almost always" is how the wrong disk gets
-      # formatted on a machine with two.
+      # /dev/vda is the first virtio disk, and on this instance it is the only
+      # one. The comment here used to say "by-id, not /dev/vda" while the line
+      # below it said /dev/vda — a rule and its opposite in four lines, which is
+      # the third time this project has written one. On a rented guest there is
+      # no stable by-id path to write, because the disk is the provider's, so
+      # /dev/vda is correct HERE and the safety measure is the command rather
+      # than the path: `lsblk` on the running image, before the install, and the
+      # answer must name exactly one disk. numtide's own Vultr walkthrough uses
+      # /dev/vda for the same reason.
       device = "/dev/vda";
       content = {
         type = "gpt";
         partitions = {
+          # A 1 MiB unformatted partition with no filesystem, which is where
+          # GRUB embeds its core image when the machine boots BIOS rather than
+          # UEFI. It is here because the firmware mode of a rented instance is
+          # NOT known in advance and getting it wrong is the failure this file
+          # already warned about: the box does not come back after the install.
+          #
+          # Confirmed against disko's own example/hybrid.nix, which is exactly
+          # this layout — a partition with a size and a type and NOTHING else is
+          # valid, and the 1M EF02 partition is its documented purpose ("for
+          # grub MBR"). The alternative was to guess the mode and ship a config
+          # that only survives a correct guess.
+          boot = {
+            size = "1M";
+            type = "EF02";
+          };
           ESP = {
             size = "512M";
             type = "EF00";
