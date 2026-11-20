@@ -1,0 +1,151 @@
+#+TITLE: LUNA research: local models and model switching
+#+AUTHOR: Cooper Oscarfono
+#+DATE: 2026-11-21
+#+STARTUP: overview
+
+* About this review
+
+Coops wants to switch the model of LUNA between cloud and local, and
+between censored and uncensored (abliterated), by voice or with a button.
+This review looks at the open models that can run on luna, and at the
+design of the switch. It also keeps some ideas from the "agentic OS" of
+the YouTube creator Jack Roberts.
+
+The sources are web search summaries from 2026-11-21. Most are guides and
+blogs. Read a model card on Hugging Face before a decision depends on it.
+The grades are the same as in [[file:interface-review.org][the interface review]].
+
+* The hardware on luna
+
+Measured on 2026-11-21:
+
+| Item              | Value                                              |
+|-------------------+----------------------------------------------------|
+| CPU               | 4 vCPU, AMD EPYC Turin, with AVX2 and AVX-512      |
+| RAM               | 16 GB. 14.2 GB available with the E3 services.     |
+| GPU               | None                                               |
+| Services now      | Synapse, cores, web, PostgreSQL, Whisper, Piper: about 1.3 GB |
+| Planned           | The REA microVM (about 6 GB) and God's Eye View (about 1 to 2 GB) |
+
+Thus a local model has about 6 GB when the REA lab runs, and about 12 GB
+when it does not. CPU speed follows the active parameters. RAM follows the
+total parameters, because all the weights must stay in memory.
+
+* Findings
+
+** 1. Dense models from 4B to 9B fit, at Q4
+
+- Guides agree that a 16 GB machine with no GPU runs 4B to 8B models at Q4
+  well. llama.cpp with GGUF files is the usual runtime. (anecdote)
+  - https://www.popularai.org/p/best-cpu-only-local-llm-2026
+  - https://insiderllm.com/guides/cpu-only-llms-what-actually-works/
+  - https://huggingface.co/blog/daya-shankar/open-source-llm-models-to-run-locally
+- Names in these guides: Qwen3.5 4B, Gemma 4 E4B, Phi-4-mini, Qwen3 8B.
+- Speed figures do not agree. One measured table gives about 7 tok/s for
+  Phi-4-mini and about 3 tok/s for an 8B model. Other guides give
+  estimates of 15 to 25 tok/s. (anecdote)
+  - https://www.promptquorum.com/local-llms/best-cpu-only-llm
+
+** 2. Tool calling is the hard part for a small model
+
+- Qwen reports 66.1 on BFCL-V4 and 79.1 on TAU2-Bench for Qwen3.5-9B. These
+  are the numbers of the vendor. (docs, unverified)
+- IBM lists tool calling as a main use of Granite 4.2 8B. Gemma 4 E4B is
+  sold for agents on small hardware. (anecdote)
+  - https://www.labellerr.com/blog/best-small-language-models-under-10b-parameters/
+  - https://vdf.ai/blog/best-small-language-models/
+- An independent local test of 21 models covers models to about 3.8B only.
+  (anecdote)
+  - https://github.com/MikeVeerman/tool-calling-benchmark
+
+*For LUNA:* A small model makes more mistakes with tools, and it resists a
+prompt injection less well. The approval gate is code, so a weak model
+cannot approve itself. But give a local model a smaller tool set.
+
+** 3. MoE models give better answers at the same speed, but need more RAM
+
+- Qwen3-30B-A3B has 30.5B parameters, 3.3B active. gpt-oss-20b has 20.9B,
+  3.6B active. (docs)
+- The Q4 files are about 14.7 GB (gpt-oss-20b) and about 18.6 GB
+  (Qwen3-30B-A3B). (anecdote)
+  - https://gpufits.com/en/guides/moe-models-hardware-requirements/
+  - https://inventivehq.com/blog/moe-on-cpu-benchmark
+
+*For LUNA:* These models do not fit with the REA lab on the current plan.
+A 32 GB Vultr plan, or a schedule that does not run the REA lab and the
+model at the same time, would make them possible.
+
+** 4. Abliterated models
+
+- huihui-ai and mlabonne publish most abliterated builds of Qwen and Gemma,
+  as GGUF files and as Ollama tags (for example =huihui_ai/qwen3-abliterated:8b=).
+  (anecdote)
+  - https://locallyuncensored.com/blog/abliterated-models-guide.html
+  - https://localaimaster.com/blog/best-uncensored-local-llms
+  - https://github.com/routerhubSI/uncensored-models
+- An abliterated model keeps the license of its base model. (anecdote)
+
+*For LUNA:* An abliterated build of the same base as the censored local
+model makes the switch simple: same size, same speed, same prompt format.
+A GGUF file is data, not code. Pin each file by its sha256 hash in Nix.
+
+* Candidate models for luna
+
+| Profile             | First candidate                     | Q4 size  | Note                                  |
+|---------------------+-------------------------------------+----------+---------------------------------------|
+| cloud               | claude-opus-5-5 (now)               | none     | Best tools and judgement. Data leaves luna. |
+| local               | Qwen3.5-9B Instruct, Q4_K_M         | ~5.5 GB  | Best tool numbers under 10B (vendor)  |
+| local-fast          | Qwen3.5-4B Instruct, Q4_K_M         | ~2.5 GB  | For voice. About two times faster.    |
+| local-uncensored    | An abliterated build of the same Qwen3.5 base | same | huihui-ai or mlabonne build         |
+| local-large (later) | Qwen3-30B-A3B or gpt-oss-20b        | 15-19 GB | Needs 32 GB, or no REA lab at the same time |
+
+*CAUTION:* The names Qwen3.5 and Gemma 4 come from secondary sources.
+Find each file on Hugging Face, and read its model card, before the Nix
+derivation names it.
+
+Before a decision, measure on luna with =llama-bench=: tokens per second
+for prompt and for generation, at Q4_K_M and at Q5_K_M, with 4 threads.
+
+* Design of the switch
+
+- *Profiles, not raw model names.* A profile names a backend (=claude= or
+  =local=), a model, a tool set and a voice speed. The site values hold
+  the profiles.
+- *Code switches the model, not the model.* The Matrix command
+  =/model <profile>=, a button in the page and a fixed voice phrase
+  ("LUNA, go local", "LUNA, go uncensored", "LUNA, back to cloud") go to
+  code before the agent, as =approve= does. The model cannot switch itself.
+- *A switch starts a new conversation.* Thinking blocks belong to one
+  model, so the history of a Claude conversation cannot go to a local
+  model. LUNA can carry a short text summary across.
+- *The presence element shows the profile.* A colour or a mark shows
+  cloud, local or uncensored, so Coops always knows which model answers.
+- *Each profile has its own tool set.* A local profile has no outbound
+  tools. The tier 2 approval stays in code for every profile.
+- *Privacy is better on a local model.* Money data never leaves luna. Thus
+  a local profile can read money data without the taint rule for the web.
+- *Runtime:* llama.cpp server on =127.0.0.1=, from nixpkgs. The model
+  files come from Hugging Face once, at build time, pinned by hash. No
+  third-party service at run time.
+- *The Elixir core needs a second backend:* the chat API of llama.cpp
+  (OpenAI-compatible JSON) beside the Claude client. This is E5 work.
+
+* Ideas from the agentic OS of Jack Roberts
+
+The sources are third-party summaries of his videos. (anecdote)
+- https://moderncreator.app/creators/jack-roberts
+- https://moderncreator.app/2026-07-06-jack-roberts-fable-5-agentic-os-is-insane
+- https://robincartier.com/wiki/wiki-entities/jack-roberts/
+
+| Idea                                              | In LUNA                                   |
+|---------------------------------------------------+-------------------------------------------|
+| A mission-control dashboard: models, memory, skills, connections, costs | A new System panel, with the profile switch |
+| Shared memory in layers: identity, project, long term | Backlog #8 (labelled memory sections)  |
+| Routing between models                            | The profiles above                        |
+| Multi-model debate                                | Backlog #12 (branch a conversation), with cloud and local side by side |
+| Autonomous overnight work                         | Backlog #9 and #10, with no tier 2 action when no human is present |
+| A voice interface                                 | Stage E3 (done)                           |
+
+His system uses many outside services (Gmail, Apollo, Obsidian sync and
+others). LUNA keeps to its rule: as few third-party providers as possible.
+Watch the videos for the interface and the feature set, not for the stack.

@@ -406,6 +406,7 @@ The Python core stays until the new core passes the same tests.
 | Voice out         | =services.wyoming.piper=, local on luna, a female voice             |
 | Packaging         | =mixRelease= with =fetchMixDeps= in the nyx flake                   |
 | Core language     | Elixir, with Req for HTTP. Coops decided on 2026-11-20.            |
+| Third parties     | As few as possible. Build a tool when that is better than a subscription. |
 | Money ledger      | Stays hledger plain text in the memory, for Emacs                   |
 | Clients           | The laptop and the iPhone now. An iPhone app and a watch app later. |
 | Wake word         | "LUNA". Refer to [[*Wake word][Wake word]].                                    |
@@ -431,6 +432,7 @@ The contract between the page and the core is in [[*Build: the core API][Build: 
 These ideas come from a review of 15 assistant projects on 2026-11-20.
 A second review on the same day looked at the interface only: voice, presence and the ambient display.
 Its notes and the candidate items 13 to 22 are in [[file:research/interface-review.org][research/interface-review.org]].
+The research for items 23 to 26 is in [[file:research/local-models.org][research/local-models.org]].
 Each idea has its source project and its stage.
 
 | #  | Feature                                                                 | Source            | Stage |
@@ -447,6 +449,10 @@ Each idea has its source project and its stage.
 | 10 | Refuse a tier 2 request from a scheduled job when no human is present   | OpenClaw          | core  |
 | 11 | Transcribe voice memos from Matrix                                       | Hermes            | E5    |
 | 12 | Branch a conversation to compare plans                                  | LibreChat         | E4    |
+| 23 | Model profiles: cloud, local and local uncensored (abliterated). Switch by voice, button or =/model=. Code switches, not the model. | Coops | E5 |
+| 24 | llama.cpp server on luna. Model files pinned by hash. Measure with =llama-bench= first. | Coops | E5 |
+| 25 | The presence element shows the active profile                            | Coops             | E4    |
+| 26 | A mission-control System panel: profiles, memory, tools, costs          | Jack Roberts      | E4    |
 
 ** Ideas that LUNA does not use
 
