@@ -82,12 +82,15 @@
     # LUNA, the private assistant, has her own flake. nyx uses one part:
     # the home-manager module that syncs the memory hub on this laptop.
     #
-    # The input is a local path because LUNA has no remote yet. When the
-    # LUNA repository has a remote, change the URL to that remote.
+    # The LUNA repository is private (GitHub oscarfono/luna). The input
+    # uses SSH, so the fetch uses the SSH key of the user and needs no
+    # GitHub token. The lock holds the revision and the hash.
     #
     # The follows lines stop a second copy of each input in the lock.
+    # When the LUNA flake drops lanzaboote and nix-index-database, delete
+    # the two follows lines for them. beta keeps its own lanzaboote.
     luna = {
-      url = "git+file:///home/coops/Projects/LUNA";
+      url = "git+ssh://git@github.com/oscarfono/luna.git?ref=master";
       inputs.nixpkgs.follows = "nixpkgs";
       inputs.home-manager.follows = "home-manager";
       inputs.sops-nix.follows = "sops-nix";
