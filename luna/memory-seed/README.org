@@ -8,7 +8,7 @@ Git records each change.
 |---------------+---------------------------------------------|
 | roster.org    | The FIFO swing dates for 12 months          |
 | money.org     | Annual costs, buckets and the spend plan    |
-| money/        | The hledger ledger                          |
+| money/        | The hledger ledger and the category rules   |
 | travel.org    | Off-swing preferences and plans             |
 | projects.org  | The project portfolio and scores            |
 | inventory.org | Hardware parts                              |

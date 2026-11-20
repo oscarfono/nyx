@@ -34,6 +34,9 @@ def test_taint_blocks_writes_to_clean_paths_only():
         ("Date 20/11/2026 ref 99", "Date 20/11/2026 ref 99"),
         ("Short 12345", "Short 12345"),
         ("Wise TRANSFER-123456789", "Wise TRANSFER-*****6789"),
+        ("Card xx4111 1111 1111 1111", "Card xx************1111"),
+        ("ACCT062000123456", "ACCT********3456"),
+        ("Store 1234 Perth", "Store 1234 Perth"),
     ],
 )
 def test_mask_numbers(text, expected):

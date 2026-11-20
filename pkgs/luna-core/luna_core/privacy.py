@@ -46,9 +46,10 @@ def write_refusal(taint: Taint, path: str) -> str | None:
     return None
 
 
-# A run of digits with single spaces or dashes between groups. A run next to
-# a decimal point or a comma and a digit is an amount, so the mask skips it.
-_DIGIT_RUN = re.compile(r"(?<![\w.,])\d(?:[ -]?\d)*(?!\w|[.,]\d)")
+# A run of digits with single spaces or dashes between groups. A letter can
+# touch the run ("xx4111 1111 ..."), and the mask still applies. A decimal
+# point or a comma next to the run means an amount, so the mask skips it.
+_DIGIT_RUN = re.compile(r"(?<![\d.,])\d(?:[ -]?\d)*(?![\d]|[.,]\d)")
 
 
 def mask_numbers(text: str, min_digits: int = 6) -> str:

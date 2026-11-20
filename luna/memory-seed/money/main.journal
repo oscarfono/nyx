@@ -1,11 +1,6 @@
-; LUNA money ledger in hledger format. Amounts in AUD.
-; Run: hledger -f money/main.journal forecast
-; Replace the 0 amounts with real amounts.
-
-~ every 4 weeks from 2026-12-01  pay
-    assets:income      AUD 0
-    income:fifo
-
-~ yearly from 2027-01-01  insurance
-    expenses:insurance  AUD 0
-    assets:bills
+; LUNA money ledger, in hledger format. Amounts carry a currency code.
+; LUNA writes tx/<year>.journal. Do not edit those files by hand.
+; Edit accounts.journal, tx/opening.journal and categories.org.
+; Run: hledger -f money/main.journal balance
+include accounts.journal
+include tx/*.journal

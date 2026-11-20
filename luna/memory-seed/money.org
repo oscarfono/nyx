@@ -25,7 +25,14 @@ One row for each cost. LUNA finds costs in the bank exports that are not here.
 | Invest |         | All surplus after the buffer        |
 
 * Safe to spend
-spend per week = (net per year − annual costs − buffer per year − invest target) / 52
+spend per week = (net per year − annual costs − buffer per year − invest per year) / 52
+LUNA calculates the number from the Income, Annual costs and Targets tables.
+
+* Targets
+| Target | Per year (AUD) |
+|--------+----------------|
+| Buffer |                |
+| Invest |                |
 
 * Investment plan
 Write the plan here before LUNA gives rebalance alerts.

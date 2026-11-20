@@ -37,6 +37,11 @@ class Config:
     matrix_password: str
     telegram_token: str | None
     telegram_chat_id: str | None
+    money_enabled: bool = False
+
+    @property
+    def inbox_dir(self) -> Path:
+        return self.state_dir / "inbox"
 
     @property
     def memory_dir(self) -> Path:
@@ -66,4 +71,5 @@ def load() -> Config:
         matrix_password=_required(_credential("matrix_password"), "matrix_password"),
         telegram_token=_credential("telegram_token"),
         telegram_chat_id=_credential("telegram_chat_id"),
+        money_enabled=env("LUNA_MONEY", "0") == "1",
     )

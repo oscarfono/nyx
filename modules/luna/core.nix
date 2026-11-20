@@ -72,6 +72,21 @@ let
       fi
       git -C "$work" push --set-upstream origin main
     fi
+    # Add seed files that a later version of LUNA brought. Never overwrite a
+    # file: the memory belongs to the owner after the first start.
+    if git -C "$work" pull --ff-only --quiet; then
+      (cd "$seed" && find . -type f) | while read -r f; do
+        if [ ! -e "$work/$f" ]; then
+          mkdir -p "$work/$(dirname "$f")"
+          cat "$seed/$f" > "$work/$f"
+          git -C "$work" add -- "$f"
+        fi
+      done
+      if ! git -C "$work" diff --cached --quiet; then
+        git -C "$work" commit --quiet -m "Add new memory seed files"
+        git -C "$work" push --quiet origin main
+      fi
+    fi
   '';
 in
 {
@@ -112,7 +127,7 @@ in
     after = [ "network-online.target" "matrix-synapse.service" ];
     wants = [ "network-online.target" ];
     wantedBy = [ "multi-user.target" ];
-    path = [ pkgs.git ];
+    path = [ pkgs.git pkgs.hledger ];
     environment = {
       LUNA_STATE_DIR = stateDir;
       LUNA_HOMESERVER = "http://127.0.0.1:8008";
@@ -122,6 +137,7 @@ in
       LUNA_BRIEF_TIME = site.briefTime;
       LUNA_MODEL = "claude-opus-5-5";
       LUNA_EFFORT = "medium";
+      LUNA_MONEY = if site.money then "1" else "0";
       GIT_AUTHOR_NAME = "LUNA";
       GIT_AUTHOR_EMAIL = "luna@${fqdn}";
       GIT_COMMITTER_NAME = "LUNA";

@@ -78,6 +78,15 @@ class Memory:
                         return hits
         return hits
 
+    def commit(self, paths: list[str], message: str) -> None:
+        """Commit the files at the paths, then push. Do nothing when no file changed."""
+        self._git("add", "--", *paths)
+        if not self._git("status", "--porcelain", "--", *paths).strip():
+            return
+        self._git("commit", "--quiet", "-m", message, "--", *paths)
+        if self.remote:
+            self._git("push", "--quiet", "origin", "HEAD:main")
+
     def append(self, relative: str, heading: str, body: str, now: datetime) -> str:
         self.sync()
         path = self.resolve(relative)

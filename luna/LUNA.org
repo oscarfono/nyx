@@ -285,6 +285,17 @@ LUNA includes flights, food and the cost of a kitchen against takeaway food.
 - The reader agent gives a structured summary: sender, intent, deadline, action.
 - The main agent drafts replies. Sending is tier 2.
 
+*Payslips.* Payslips arrive by email.
+- The reader agent finds the payslip email.
+- Code extracts the text from the PDF on luna. The model does not read the PDF.
+- Code keeps the pay date, gross, tax, super and net pay only.
+- Code removes the TFN, the address and the employee ID before the model sees any text.
+- LUNA writes the figures to =money.org= and to the ledger. LUNA does not keep the PDF.
+
+*Account data.* LUNA uses read-only access only:
+bank CSV exports, and the read-only personal API tokens of Up and Wise.
+LUNA never holds a bank login. A shared login can void the protection of the ePayments Code.
+
 ** Phase 6: Dev partner
 
 - LUNA works in git worktrees in a sandboxed user on the VPS.
@@ -349,6 +360,9 @@ The test passes when the API runs no search after the removal.
 2. Run the test on luna. The test is =scratchpad/test-tool-removal.py= in the session that wrote this review.
 3. Make sure that the output says =RESULT: PASS=.
 4. Write the date of the pass here.
+5. On luna, replace =money/main.journal= with the seed version.
+   The first seed had no =include tx/*.journal= line. The money tools refuse an old file.
+6. Set =money = true= in the site values. Deploy.
 
 Status: *not run*. The first run failed with "credit balance is too low".
 
@@ -457,6 +471,10 @@ Edit these values before the first install.
 
   # Set to true to send nudges to Telegram. Nudges contain no personal data.
   telegram = false;
+
+  # CAUTION: keep false until the gate test in "The gate for phase 2" passes.
+  # true gives the agent the money tools and starts the Monday money post.
+  money = false;
 }
 #+end_src
 
@@ -922,6 +940,21 @@ let
       fi
       git -C "$work" push --set-upstream origin main
     fi
+    # Add seed files that a later version of LUNA brought. Never overwrite a
+    # file: the memory belongs to the owner after the first start.
+    if git -C "$work" pull --ff-only --quiet; then
+      (cd "$seed" && find . -type f) | while read -r f; do
+        if [ ! -e "$work/$f" ]; then
+          mkdir -p "$work/$(dirname "$f")"
+          cat "$seed/$f" > "$work/$f"
+          git -C "$work" add -- "$f"
+        fi
+      done
+      if ! git -C "$work" diff --cached --quiet; then
+        git -C "$work" commit --quiet -m "Add new memory seed files"
+        git -C "$work" push --quiet origin main
+      fi
+    fi
   '';
 in
 {
@@ -962,7 +995,7 @@ in
     after = [ "network-online.target" "matrix-synapse.service" ];
     wants = [ "network-online.target" ];
     wantedBy = [ "multi-user.target" ];
-    path = [ pkgs.git ];
+    path = [ pkgs.git pkgs.hledger ];
     environment = {
       LUNA_STATE_DIR = stateDir;
       LUNA_HOMESERVER = "http://127.0.0.1:8008";
@@ -972,6 +1005,7 @@ in
       LUNA_BRIEF_TIME = site.briefTime;
       LUNA_MODEL = "claude-opus-5-5";
       LUNA_EFFORT = "medium";
+      LUNA_MONEY = if site.money then "1" else "0";
       GIT_AUTHOR_NAME = "LUNA";
       GIT_AUTHOR_EMAIL = "luna@${fqdn}";
       GIT_COMMITTER_NAME = "LUNA";
@@ -1022,7 +1056,7 @@ in
 ** Package
 
 #+begin_src nix :tangle ../pkgs/luna-core/default.nix
-{ lib, python3Packages, git }:
+{ lib, python3Packages, git, hledger }:
 
 python3Packages.buildPythonApplication {
   pname = "luna-core";
@@ -1042,7 +1076,7 @@ python3Packages.buildPythonApplication {
     tzdata
   ];
 
-  nativeCheckInputs = [ python3Packages.pytestCheckHook git ];
+  nativeCheckInputs = [ python3Packages.pytestCheckHook git hledger ];
 
   meta = {
     description = "The core agent of LUNA";
@@ -1118,6 +1152,11 @@ class Config:
     matrix_password: str
     telegram_token: str | None
     telegram_chat_id: str | None
+    money_enabled: bool = False
+
+    @property
+    def inbox_dir(self) -> Path:
+        return self.state_dir / "inbox"
 
     @property
     def memory_dir(self) -> Path:
@@ -1147,6 +1186,7 @@ def load() -> Config:
         matrix_password=_required(_credential("matrix_password"), "matrix_password"),
         telegram_token=_credential("telegram_token"),
         telegram_chat_id=_credential("telegram_chat_id"),
+        money_enabled=env("LUNA_MONEY", "0") == "1",
     )
 #+end_src
 
@@ -1377,6 +1417,15 @@ class Memory:
                         return hits
         return hits
 
+    def commit(self, paths: list[str], message: str) -> None:
+        """Commit the files at the paths, then push. Do nothing when no file changed."""
+        self._git("add", "--", *paths)
+        if not self._git("status", "--porcelain", "--", *paths).strip():
+            return
+        self._git("commit", "--quiet", "-m", message, "--", *paths)
+        if self.remote:
+            self._git("push", "--quiet", "origin", "HEAD:main")
+
     def append(self, relative: str, heading: str, body: str, now: datetime) -> str:
         self.sync()
         path = self.resolve(relative)
@@ -1458,9 +1507,10 @@ def write_refusal(taint: Taint, path: str) -> str | None:
     return None
 
 
-# A run of digits with single spaces or dashes between groups. A run next to
-# a decimal point or a comma and a digit is an amount, so the mask skips it.
-_DIGIT_RUN = re.compile(r"(?<![\w.,])\d(?:[ -]?\d)*(?!\w|[.,]\d)")
+# A run of digits with single spaces or dashes between groups. A letter can
+# touch the run ("xx4111 1111 ..."), and the mask still applies. A decimal
+# point or a comma next to the run means an amount, so the mask skips it.
+_DIGIT_RUN = re.compile(r"(?<![\d.,])\d(?:[ -]?\d)*(?![\d]|[.,]\d)")
 
 
 def mask_numbers(text: str, min_digits: int = 6) -> str:
@@ -1987,6 +2037,7 @@ class Bot:
 
 The scheduler runs two jobs:
 - The morning brief, each day at the brief time.
+  On Monday, with =money = true=, the brief adds the money summary.
 - A memory sync, each five minutes.
 
 The brief uses a separate agent, so the brief does not fill the chat conversation.
@@ -2004,6 +2055,7 @@ from .agent import Agent
 from .audit import AuditLog
 from .matrix_bot import Bot
 from .memory import Memory, MemoryAccessError
+from .money import Money
 from .sysinfo import update_notice
 
 BRIEF_PROMPT = """\
@@ -2025,7 +2077,9 @@ def next_run(now: datetime, at: time) -> datetime:
     return candidate
 
 
-async def brief_loop(make_agent: Callable[[], Agent], bot: Bot, audit: AuditLog, at: time) -> None:
+async def brief_loop(
+    make_agent: Callable[[], Agent], bot: Bot, audit: AuditLog, at: time, money: Money | None = None
+) -> None:
     while True:
         agent = make_agent()
         now = agent.now()
@@ -2035,6 +2089,9 @@ async def brief_loop(make_agent: Callable[[], Agent], bot: Bot, audit: AuditLog,
             notice = update_notice(agent.now().date())
             if notice is not None:
                 text = f"{notice}\n\n{text}"
+            # The Monday money post. Code makes the numbers, not the model.
+            if money is not None and agent.now().weekday() == 0:
+                text = f"{text}\n\n{money.summary()}"
             await bot.send_owner(text)
             audit.write("brief.sent")
         except Exception as error:  # noqa: BLE001 - the loop must not stop
@@ -2105,7 +2162,8 @@ def update_notice(today: date, version: str | None = None) -> str | None:
 from __future__ import annotations
 
 import asyncio
-from datetime import time
+from datetime import datetime, time
+from zoneinfo import ZoneInfo
 
 from . import config as config_module
 from .agent import Agent
@@ -2113,6 +2171,8 @@ from .approvals import Approvals
 from .audit import AuditLog
 from .matrix_bot import Bot
 from .memory import Memory
+from .money import Money
+from .money_tools import build_money_tools
 from .scheduler import brief_loop, sync_loop
 from .telegram import Nudger
 from .tools import build_tools
@@ -2125,18 +2185,25 @@ async def run() -> None:
     approvals = Approvals(config.approvals_dir, audit)
     nudger = Nudger(config.telegram_token, config.telegram_chat_id, audit)
 
+    money: Money | None = None
+
     def make_agent() -> Agent:
         agent = Agent(config, [], audit)
         agent.tools = build_tools(memory, audit, agent.now, agent.taint)
+        if money is not None:
+            agent.tools += build_money_tools(money, audit, agent.taint)
         return agent
 
+    if config.money_enabled:
+        zone = ZoneInfo(config.owner_timezone)
+        money = Money(memory, config.inbox_dir, audit, lambda: datetime.now(zone).date())
     chat_agent = make_agent()
     bot = Bot(config, chat_agent, approvals, nudger, audit)
     hour, minute = (int(part) for part in config.brief_time.split(":"))
     audit.write("luna.start", model=config.model)
     await asyncio.gather(
         bot.run(),
-        brief_loop(make_agent, bot, audit, time(hour, minute)),
+        brief_loop(make_agent, bot, audit, time(hour, minute), money),
         sync_loop(memory, audit),
     )
 
@@ -2294,6 +2361,9 @@ def test_taint_blocks_writes_to_clean_paths_only():
         ("Date 20/11/2026 ref 99", "Date 20/11/2026 ref 99"),
         ("Short 12345", "Short 12345"),
         ("Wise TRANSFER-123456789", "Wise TRANSFER-*****6789"),
+        ("Card xx4111 1111 1111 1111", "Card xx************1111"),
+        ("ACCT062000123456", "ACCT********3456"),
+        ("Store 1234 Perth", "Store 1234 Perth"),
     ],
 )
 def test_mask_numbers(text, expected):
@@ -2339,6 +2409,944 @@ def test_next_run_is_tomorrow_after_the_time():
     assert next_run(datetime(2026, 11, 20, 8, 0), time(7, 0)) == datetime(2026, 11, 21, 7, 0)
 #+end_src
 
+* Build: phase 2 money
+
+#+begin_quote
+*CAUTION:* Keep =money = false= in the site values until the gate test passes.
+Refer to [[*The gate for phase 2][The gate for phase 2]].
+With =money = false=, the agent has no money tools and the Monday money post does not run.
+#+end_quote
+
+** How the import works
+
+1. Export a CSV file from the bank.
+2. Name the file =<profile>--<account>.csv=, for example =commbank--personal.csv=.
+3. Send the file to the inbox: =make money-upload FILES=commbank--personal.csv=.
+4. Tell LUNA to import, or wait for the next import.
+5. LUNA reads the file, masks account numbers, and writes =money/tx/<year>.journal=.
+6. LUNA commits the journal and deletes the CSV file from the inbox.
+
+The importer refuses a file that does not agree with its profile.
+The importer then keeps the file in the inbox and tells you why.
+A second import of the same transactions adds nothing.
+Each transaction has a =luna-id= tag that the importer uses to find duplicates.
+
+** Profiles
+
+| Profile    | Institution             | Currency | Format                       | Status     |
+|------------+-------------------------+----------+------------------------------+------------|
+| =commbank= | CommBank (personal and business) | AUD | No header: date, amount, description, balance | Unverified |
+| =bendigo=  | Bendigo Bank            | AUD      | No header: date, amount, description | Unverified |
+| =up=       | Up                      | AUD      | Header: Time, Payee, Description, Total (AUD) | Unverified |
+| =coopnz=   | The Co-operative Bank (NZ) | NZD   | Header: Date, Details, Amount | Unverified |
+| =wise=     | Wise                    | from file | Header: TransferWise ID, Date, Amount, Currency, Description | Unverified |
+
+"Unverified" means that no real export checked the profile.
+Send one header row from each institution to verify its profile.
+A header row has no transaction data.
+
+Use one account name for each account, for example =personal=, =bgb= (Bloody Good Builders), =spending=.
+The importer makes the ledger account =assets:bank:<profile>:<account>=.
+
+** Categories
+
+=money/categories.org= holds one table of rules.
+Each rule is a pattern and an account.
+The pattern is a regular expression. The match ignores case.
+The first rule that matches a description wins.
+A transaction with no match goes to =expenses:unknown= or =income:unknown=.
+A transfer between your own accounts goes to =assets:transfers=.
+The two sides of a transfer cancel in =assets:transfers=.
+
+** The plan and the safe-to-spend number
+
+The plan is in three tables in =money.org=: Income, Annual costs and Targets.
+Code calculates the number, not the model:
+
+#+begin_example
+spend per week = (net income per year - annual costs - buffer per year - invest per year) / 52
+#+end_example
+
+** Org tables
+
+#+begin_src python :tangle ../pkgs/luna-core/luna_core/orgtable.py
+"""Read the tables in an org-mode file, by the heading above each table."""
+
+from __future__ import annotations
+
+import re
+
+_HEADING = re.compile(r"^\*+\s+(.*?)\s*$")
+
+
+def tables_by_heading(text: str) -> dict[str, list[list[str]]]:
+    """Return the rows of each table under its nearest heading. Rules are omitted."""
+    tables: dict[str, list[list[str]]] = {}
+    heading: str | None = None
+    for line in text.splitlines():
+        match = _HEADING.match(line)
+        if match:
+            heading = match.group(1)
+            continue
+        cells = line.strip()
+        if heading is None or not cells.startswith("|") or cells.startswith("|-"):
+            continue
+        tables.setdefault(heading, []).append([cell.strip() for cell in cells.strip("|").split("|")])
+    return tables
+
+
+def records(rows: list[list[str]]) -> list[dict[str, str]]:
+    """Use the first row as the column names."""
+    if not rows:
+        return []
+    names = rows[0]
+    return [dict(zip(names, row, strict=False)) for row in rows[1:]]
+#+end_src
+
+** Category rules
+
+#+begin_src python :tangle ../pkgs/luna-core/luna_core/money_rules.py
+"""Read, apply and add the category rules in money/categories.org."""
+
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass
+from decimal import Decimal
+from pathlib import Path
+
+from .orgtable import tables_by_heading
+
+ACCOUNT = re.compile(r"^(assets|liabilities|income|expenses|equity)(:[a-z0-9][a-z0-9-]*)+$")
+UNKNOWN_OUT = "expenses:unknown"
+UNKNOWN_IN = "income:unknown"
+TABLE = "Rules"
+
+
+class RuleError(Exception):
+    """The rule is not valid."""
+
+
+@dataclass(frozen=True)
+class Rule:
+    pattern: re.Pattern[str]
+    account: str
+
+
+def load_rules(path: Path) -> tuple[list[Rule], list[str]]:
+    """Return the valid rules and a list of problems."""
+    rows = tables_by_heading(path.read_text(encoding="utf-8")).get(TABLE, [])
+    rules: list[Rule] = []
+    problems: list[str] = []
+    for row in rows[1:]:
+        if len(row) < 2 or not row[0]:
+            continue
+        try:
+            rules.append(Rule(re.compile(row[0], re.IGNORECASE), _check_account(row[1])))
+        except (re.error, RuleError) as error:
+            problems.append(f"{row[0]!r}: {error}")
+    return rules, problems
+
+
+def categorise(description: str, amount: Decimal, rules: list[Rule]) -> str:
+    for rule in rules:
+        if rule.pattern.search(description):
+            return rule.account
+    return UNKNOWN_OUT if amount < 0 else UNKNOWN_IN
+
+
+def add_rule(path: Path, pattern: str, account: str) -> str:
+    """Append one rule to the table. Return the text for the owner."""
+    if "|" in pattern or "\n" in pattern:
+        raise RuleError("A pattern cannot contain '|' or a new line. Use two rules.")
+    try:
+        re.compile(pattern, re.IGNORECASE)
+    except re.error as error:
+        raise RuleError(f"The pattern is not a valid regular expression: {error}") from error
+    _check_account(account)
+    text = path.read_text(encoding="utf-8")
+    if not text.endswith("\n"):
+        text += "\n"
+    path.write_text(text + f"| {pattern} | {account} |\n", encoding="utf-8")
+    return f"Added the rule {pattern!r} -> {account}."
+
+
+def _check_account(account: str) -> str:
+    if not ACCOUNT.match(account):
+        raise RuleError(
+            f"{account!r} is not a valid account. Use lower case, for example expenses:food:groceries."
+        )
+    return account
+#+end_src
+
+** Import
+
+#+begin_src python :tangle ../pkgs/luna-core/luna_core/money_import.py
+"""Read bank CSV files, mask account numbers, and make hledger entries."""
+
+from __future__ import annotations
+
+import csv
+import hashlib
+import re
+from collections import Counter
+from dataclasses import dataclass
+from datetime import date, datetime
+from decimal import Decimal, InvalidOperation
+from pathlib import Path
+
+from .money_rules import Rule, categorise
+from .privacy import mask_numbers
+
+Column = str | int
+
+
+class MoneyFileError(Exception):
+    """The file does not agree with its profile."""
+
+
+@dataclass(frozen=True)
+class Profile:
+    name: str
+    currency: str
+    date: Column
+    amount: Column
+    description: tuple[Column, ...]
+    date_formats: tuple[str, ...]
+    header: bool
+    columns: int | None = None
+    currency_column: Column | None = None
+    id_column: Column | None = None
+    verified: bool = False
+
+
+PROFILES: dict[str, Profile] = {
+    "commbank": Profile("commbank", "AUD", 0, 1, (2,), ("%d/%m/%Y",), header=False, columns=4),
+    "bendigo": Profile("bendigo", "AUD", 0, 1, (2,), ("%d/%m/%Y",), header=False, columns=3),
+    "up": Profile("up", "AUD", "Time", "Total (AUD)", ("Payee", "Description"), ("%Y-%m-%d",), header=True),
+    "coopnz": Profile("coopnz", "NZD", "Date", "Amount", ("Details",), ("%d/%m/%Y",), header=True),
+    "wise": Profile(
+        "wise", "AUD", "Date", "Amount", ("Description", "Payee Name", "Merchant"),
+        ("%d-%m-%Y", "%Y-%m-%d"), header=True, currency_column="Currency", id_column="TransferWise ID",
+    ),
+}
+
+_NAME = re.compile(r"^(?P<profile>[a-z]+)--(?P<account>[a-z0-9-]+)\.csv$", re.IGNORECASE)
+_ID_TAG = re.compile(r"luna-id:([0-9a-f]{16})")
+_ISO_DAY = re.compile(r"^(\d{4}-\d{2}-\d{2})")
+
+
+@dataclass(frozen=True)
+class Transaction:
+    day: date
+    amount: Decimal
+    currency: str
+    description: str
+    luna_id: str
+
+
+def account_for(profile: str, account: str) -> str:
+    return f"assets:bank:{profile}:{account.lower()}"
+
+
+def profile_for(path: Path) -> tuple[Profile, str]:
+    match = _NAME.match(path.name)
+    if match is None:
+        raise MoneyFileError(
+            f"{path.name}: use the name <profile>--<account>.csv, for example commbank--personal.csv."
+        )
+    name = match["profile"].lower()
+    if name not in PROFILES:
+        raise MoneyFileError(f"{path.name}: no profile {name!r}. Profiles: {', '.join(PROFILES)}.")
+    return PROFILES[name], match["account"].lower()
+
+
+def parse_amount(text: str) -> Decimal:
+    clean = text.strip()
+    negative = clean.startswith("(") and clean.endswith(")")
+    clean = re.sub(r"[\s$,()A-Za-z]", "", clean)
+    try:
+        value = Decimal(clean)
+    except InvalidOperation as error:
+        raise MoneyFileError(f"{text!r} is not an amount") from error
+    return -value if negative else value
+
+
+def parse_day(text: str, formats: tuple[str, ...]) -> date:
+    clean = text.strip()
+    iso = _ISO_DAY.match(clean)
+    if iso:
+        return date.fromisoformat(iso.group(1))
+    for fmt in formats:
+        try:
+            return datetime.strptime(clean, fmt).date()
+        except ValueError:
+            continue
+    raise MoneyFileError(f"{text!r} is not a date in the format {' or '.join(formats)}")
+
+
+def clean_description(parts: list[str]) -> str:
+    text = " ".join(part.strip() for part in parts if part and part.strip())
+    # hledger reads ';' as the start of a comment, and '|' as payee|note.
+    text = re.sub(r"[;|]", ",", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return mask_numbers(text) or "(no description)"
+
+
+def read_file(path: Path) -> tuple[Profile, str, list[Transaction]]:
+    profile, account = profile_for(path)
+    with path.open(encoding="utf-8-sig", newline="") as handle:
+        rows = [row for row in csv.reader(handle) if any(cell.strip() for cell in row)]
+    if not rows:
+        raise MoneyFileError(f"{path.name}: the file has no rows.")
+
+    if profile.header:
+        names = [cell.strip() for cell in rows[0]]
+        wanted = [c for c in (profile.date, profile.amount, *profile.description,
+                              profile.currency_column, profile.id_column) if isinstance(c, str)]
+        missing = [c for c in wanted if c not in names]
+        if missing:
+            raise MoneyFileError(
+                f"{path.name}: the header has no column {', '.join(missing)}. "
+                f"The {profile.name} profile is unverified. Send LUNA the header row."
+            )
+        index = {name: i for i, name in enumerate(names)}
+        body = rows[1:]
+    else:
+        index = {}
+        body = rows
+        wrong = [n for n, row in enumerate(body, 1) if len(row) != profile.columns]
+        if wrong:
+            raise MoneyFileError(
+                f"{path.name}: row {wrong[0]} has {len(body[wrong[0] - 1])} columns. "
+                f"The {profile.name} profile expects {profile.columns}."
+            )
+
+    def cell(row: list[str], column: Column | None) -> str:
+        if column is None:
+            return ""
+        position = index[column] if isinstance(column, str) else column
+        return row[position] if position < len(row) else ""
+
+    seen: Counter[tuple[str, ...]] = Counter()
+    transactions: list[Transaction] = []
+    for number, row in enumerate(body, 1):
+        try:
+            day = parse_day(cell(row, profile.date), profile.date_formats)
+            amount = parse_amount(cell(row, profile.amount))
+        except MoneyFileError as error:
+            raise MoneyFileError(f"{path.name}: data row {number}: {error}") from error
+        currency = (cell(row, profile.currency_column).strip().upper() or profile.currency)
+        raw = [cell(row, c) for c in profile.description]
+        external = cell(row, profile.id_column).strip()
+        if external:
+            key: tuple[str, ...] = (profile.name, account, "id", external)
+        else:
+            base = (profile.name, account, day.isoformat(), str(amount), currency, " ".join(raw))
+            seen[base] += 1
+            key = (*base, str(seen[base]))
+        luna_id = hashlib.sha256("\x1f".join(key).encode()).hexdigest()[:16]
+        transactions.append(Transaction(day, amount, currency, clean_description(raw), luna_id))
+    return profile, account, transactions
+
+
+def existing_ids(tx_dir: Path) -> set[str]:
+    ids: set[str] = set()
+    for journal in tx_dir.glob("*.journal"):
+        ids.update(_ID_TAG.findall(journal.read_text(encoding="utf-8")))
+    return ids
+
+
+def entry(txn: Transaction, account: str, rules: list[Rule]) -> str:
+    category = categorise(txn.description, txn.amount, rules)
+    amount = format(txn.amount, "f")
+    opposite = format(-txn.amount, "f")
+    return (
+        f"{txn.day.isoformat()} {txn.description}  ; luna-id:{txn.luna_id}\n"
+        f"    {category}  {txn.currency} {opposite}\n"
+        f"    {account}  {txn.currency} {amount}\n\n"
+    )
+#+end_src
+
+** The plan
+
+#+begin_src python :tangle ../pkgs/luna-core/luna_core/money_plan.py
+"""Read the plan in money.org, and calculate the safe-to-spend number."""
+
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass, field
+from decimal import Decimal, InvalidOperation
+from pathlib import Path
+
+from .orgtable import records, tables_by_heading
+
+WEEKS_PER_YEAR = Decimal(52)
+
+
+@dataclass
+class Plan:
+    income: Decimal = Decimal(0)
+    costs: Decimal = Decimal(0)
+    buffer: Decimal = Decimal(0)
+    invest: Decimal = Decimal(0)
+    missing: list[str] = field(default_factory=list)
+
+    @property
+    def spend_per_week(self) -> Decimal | None:
+        if self.income <= 0:
+            return None
+        return ((self.income - self.costs - self.buffer - self.invest) / WEEKS_PER_YEAR).quantize(Decimal("0.01"))
+
+
+def number(text: str | None) -> Decimal | None:
+    if text is None:
+        return None
+    clean = re.sub(r"[\s$,]|AUD", "", text)
+    if not clean:
+        return None
+    try:
+        return Decimal(clean)
+    except InvalidOperation:
+        return None
+
+
+def load_plan(path: Path) -> Plan:
+    tables = tables_by_heading(path.read_text(encoding="utf-8"))
+    plan = Plan()
+
+    for row in records(tables.get("Income", [])):
+        per_year = number(row.get("Net per year"))
+        if per_year is None:
+            pay, pays = number(row.get("Net per pay (AUD)")), number(row.get("Pays per year"))
+            per_year = pay * pays if pay is not None and pays is not None else None
+        if per_year is not None:
+            plan.income += per_year
+    if plan.income <= 0:
+        plan.missing.append("Income: write the net pay and the pays per year")
+
+    costs = [number(row.get("Per year (AUD)")) for row in records(tables.get("Annual costs", []))]
+    plan.costs = sum((c for c in costs if c is not None), Decimal(0))
+    if not any(c is not None for c in costs):
+        plan.missing.append("Annual costs: write the cost per year in each row")
+
+    for row in records(tables.get("Targets", [])):
+        value = number(row.get("Per year (AUD)"))
+        target = row.get("Target", "").lower()
+        if value is None:
+            continue
+        if target == "buffer":
+            plan.buffer = value
+        elif target == "invest":
+            plan.invest = value
+    return plan
+#+end_src
+
+** Reports
+
+All reports come from hledger, with fixed arguments.
+The agent cannot give hledger its own arguments.
+
+#+begin_src python :tangle ../pkgs/luna-core/luna_core/money_report.py
+"""Run fixed hledger reports, and return totals."""
+
+from __future__ import annotations
+
+import csv
+import io
+import re
+import shutil
+import subprocess
+from collections import defaultdict
+from datetime import date, timedelta
+from decimal import Decimal
+from pathlib import Path
+
+_AMOUNT = re.compile(r"^(?:(?P<pre>[A-Z]{3})\s*)?(?P<num>-?[\d,]*\.?\d+)(?:\s*(?P<post>[A-Z]{3}))?$")
+
+
+class ReportError(Exception):
+    """hledger failed."""
+
+
+def hledger(main: Path, *args: str) -> str:
+    binary = shutil.which("hledger")
+    if binary is None:
+        raise ReportError("hledger is not on the PATH.")
+    result = subprocess.run([binary, "-f", str(main), *args], capture_output=True, text=True, check=False)
+    if result.returncode != 0:
+        raise ReportError(result.stderr.strip() or "hledger failed")
+    return result.stdout
+
+
+def parse_amounts(cell: str) -> dict[str, Decimal]:
+    totals: dict[str, Decimal] = defaultdict(Decimal)
+    for part in cell.split(","):
+        part = part.strip()
+        if not part or part == "0":
+            continue
+        match = _AMOUNT.match(part)
+        if match is None:
+            continue
+        currency = match["pre"] or match["post"] or "?"
+        totals[currency] += Decimal(match["num"].replace(",", ""))
+    return dict(totals)
+
+
+def balances(main: Path, query: list[str], begin: date | None = None, end: date | None = None) -> dict[str, dict[str, Decimal]]:
+    args = ["balance", *query, "--flat", "--no-total", "--layout=bare", "-O", "csv"]
+    if begin is not None:
+        args += ["-b", begin.isoformat()]
+    if end is not None:
+        args += ["-e", end.isoformat()]
+    rows = list(csv.reader(io.StringIO(hledger(main, *args))))
+    out: dict[str, dict[str, Decimal]] = defaultdict(lambda: defaultdict(Decimal))
+    for row in rows[1:]:
+        if len(row) < 3:
+            continue
+        account, commodity, amount = row[0], row[1], row[2]
+        for currency, value in parse_amounts(f"{commodity} {amount}".strip()).items():
+            out[account][currency] += value
+    return {account: dict(values) for account, values in out.items()}
+
+
+def total(by_account: dict[str, dict[str, Decimal]]) -> dict[str, Decimal]:
+    out: dict[str, Decimal] = defaultdict(Decimal)
+    for values in by_account.values():
+        for currency, value in values.items():
+            out[currency] += value
+    return dict(out)
+
+
+def money_text(values: dict[str, Decimal]) -> str:
+    shown = [f"{currency} {value:,.2f}" for currency, value in sorted(values.items()) if value != 0]
+    return ", ".join(shown) or "0"
+
+
+def week_window(today: date) -> tuple[date, date]:
+    """The last 7 days, today included. The end date is exclusive."""
+    return today - timedelta(days=6), today + timedelta(days=1)
+#+end_src
+
+** The money service
+
+#+begin_src python :tangle ../pkgs/luna-core/luna_core/money.py
+"""Import bank files, and give the agent totals. Code does all arithmetic."""
+
+from __future__ import annotations
+
+import csv
+import io
+from collections.abc import Callable
+from datetime import date, timedelta
+from pathlib import Path
+
+from .audit import AuditLog
+from .memory import Memory, MemoryAccessError
+from .money_import import MoneyFileError, account_for, entry, existing_ids, read_file
+from .money_plan import load_plan
+from .money_report import ReportError, balances, hledger, money_text, total, week_window
+from .money_rules import RuleError, add_rule, load_rules
+
+
+class Money:
+    def __init__(self, memory: Memory, inbox: Path, audit: AuditLog, today: Callable[[], date]) -> None:
+        self.memory = memory
+        self.inbox = inbox
+        self.audit = audit
+        self.today = today
+
+    @property
+    def root(self) -> Path:
+        return self.memory.root / "money"
+
+    @property
+    def main(self) -> Path:
+        return self.root / "main.journal"
+
+    def _main_problem(self) -> str | None:
+        """An old main.journal does not include the files that the import writes."""
+        if not self.main.exists():
+            return "money/main.journal does not exist."
+        if "include tx/*.journal" not in self.main.read_text(encoding="utf-8"):
+            return ("money/main.journal has no line 'include tx/*.journal', so hledger cannot see "
+                    "the imported transactions. Add the line, or copy the seed main.journal.")
+        return None
+
+    def import_inbox(self) -> str:
+        """Import each CSV file in the inbox. Return counts, not transactions."""
+        self.memory.sync()
+        problem = self._main_problem()
+        if problem is not None:
+            return f"No import: {problem}"
+        files = sorted(self.inbox.glob("*.csv")) + sorted(self.inbox.glob("*.CSV"))
+        if not files:
+            return "The inbox is empty. Send files with make money-upload."
+        rules, problems = load_rules(self.root / "categories.org")
+        tx_dir = self.root / "tx"
+        tx_dir.mkdir(exist_ok=True)
+        known = existing_ids(tx_dir)
+        lines: list[str] = []
+        done: list[Path] = []
+        changed: set[str] = set()
+        for path in files:
+            try:
+                profile, account, transactions = read_file(path)
+            except MoneyFileError as error:
+                lines.append(f"- Kept {path.name}: {error}")
+                self.audit.write("money.import_refused", file=path.name, error=str(error))
+                continue
+            ledger_account = account_for(profile.name, account)
+            new = [t for t in transactions if t.luna_id not in known]
+            by_year: dict[int, list[str]] = {}
+            unknown = 0
+            for txn in sorted(new, key=lambda t: t.day):
+                text = entry(txn, ledger_account, rules)
+                unknown += ":unknown  " in text
+                by_year.setdefault(txn.day.year, []).append(text)
+                known.add(txn.luna_id)
+            for year, entries in by_year.items():
+                journal = tx_dir / f"{year}.journal"
+                with journal.open("a", encoding="utf-8") as handle:
+                    handle.writelines(entries)
+                changed.add(str(journal.relative_to(self.memory.root)))
+            lines.append(
+                f"- {path.name}: {len(new)} new, {len(transactions) - len(new)} already imported, "
+                f"{unknown} with no category"
+            )
+            self.audit.write("money.imported", file=path.name, new=len(new), unknown=unknown)
+            done.append(path)
+        if changed:
+            try:
+                self.memory.commit(sorted(changed), f"LUNA: import {len(done)} bank file(s)")
+            except MemoryAccessError as error:
+                return f"The import wrote the journal, but the commit failed: {error}. The files stay in the inbox."
+        for path in done:
+            path.unlink()
+        if problems:
+            lines.append("Rules with problems: " + "; ".join(problems))
+        return "Import:\n" + "\n".join(lines)
+
+    def summary(self) -> str:
+        """Balances, the spend of the last 7 days, and the safe-to-spend number."""
+        problem = self._main_problem()
+        if problem is not None:
+            return f"No summary: {problem}"
+        today = self.today()
+        try:
+            held = balances(self.main, ["^assets", "^liabilities"], end=today + timedelta(days=1))
+            begin, end = week_window(today)
+            spent = total(balances(self.main, ["^expenses"], begin, end))
+            unknown = balances(self.main, ["^expenses:unknown", "^income:unknown"], today - timedelta(days=30), end)
+        except ReportError as error:
+            return f"hledger failed: {error}"
+        plan = load_plan(self.memory.root / "money.org")
+        lines = ["**Money**", "", "| Account | Balance |", "|---|---|"]
+        lines += [f"| {account} | {money_text(values)} |" for account, values in sorted(held.items())
+                  if any(v != 0 for v in values.values())]
+        lines += ["", f"Spent in the last 7 days: {money_text(spent)}"]
+        weekly = plan.spend_per_week
+        if weekly is None:
+            lines.append("Safe to spend per week: not known. " + "; ".join(plan.missing))
+        else:
+            spent_aud = spent.get("AUD")
+            left = weekly - spent_aud if spent_aud is not None else weekly
+            lines.append(f"Safe to spend per week: AUD {weekly:,.2f}. Left this week: AUD {left:,.2f}")
+        if unknown:
+            lines.append(f"Transactions with no category in 30 days: {money_text(total(unknown))}. Ask LUNA to show them.")
+        return "\n".join(lines)
+
+    def unknown(self, limit: int = 20) -> str:
+        """The transactions with no category. The descriptions are masked."""
+        today = self.today()
+        try:
+            out = hledger(self.main, "register", "^expenses:unknown", "^income:unknown",
+                          "-b", (today - timedelta(days=90)).isoformat(), "-O", "csv")
+        except ReportError as error:
+            return f"hledger failed: {error}"
+        rows = list(csv.DictReader(io.StringIO(out)))[-limit:]
+        if not rows:
+            return "Each transaction has a category."
+        return "\n".join(f"- {r['date']} {r['description']}: {r['amount']}" for r in rows)
+
+    def add_rule(self, pattern: str, account: str) -> str:
+        self.memory.sync()
+        path = self.root / "categories.org"
+        try:
+            text = add_rule(path, pattern, account)
+            self.memory.commit([str(path.relative_to(self.memory.root))], f"LUNA: add the rule {pattern}")
+        except (RuleError, MemoryAccessError) as error:
+            return f"Error: {error}"
+        self.audit.write("money.rule_added", pattern=pattern, account=account)
+        return text + " The rule applies to the next import."
+#+end_src
+
+** Money tools
+
+Each money tool taints the conversation.
+=money_summary= and =money_import= return totals and counts.
+Only =money_unknown= returns transactions, and only when Coops asks.
+
+#+begin_src python :tangle ../pkgs/luna-core/luna_core/money_tools.py
+"""The money tools of the agent. Each tool taints the conversation."""
+
+from __future__ import annotations
+
+from typing import Any
+
+from anthropic import beta_async_tool
+
+from .audit import AuditLog
+from .money import Money
+from .privacy import Taint
+
+
+def build_money_tools(money: Money, audit: AuditLog, taint: Taint) -> list[Any]:
+    @beta_async_tool
+    async def money_summary() -> str:
+        """Show the balances, the spend of the last 7 days and the safe-to-spend number. Totals only."""
+        taint.mark("money_summary")
+        audit.write("tool", name="money_summary")
+        return money.summary()
+
+    @beta_async_tool
+    async def money_import() -> str:
+        """Import the bank CSV files in the inbox. Return counts only."""
+        taint.mark("money_import")
+        audit.write("tool", name="money_import")
+        return money.import_inbox()
+
+    @beta_async_tool
+    async def money_unknown(limit: int = 20) -> str:
+        """List recent transactions with no category. Use this only when Coops asks to see them.
+
+        Args:
+            limit: The maximum number of transactions, 1 to 50.
+        """
+        taint.mark("money_unknown")
+        audit.write("tool", name="money_unknown", limit=limit)
+        return money.unknown(max(1, min(limit, 50)))
+
+    @beta_async_tool
+    async def money_add_rule(pattern: str, account: str) -> str:
+        """Add a category rule. Git records the change.
+
+        Args:
+            pattern: A regular expression that matches the description. The match ignores case.
+            account: The hledger account, for example expenses:food:groceries.
+        """
+        taint.mark("money_add_rule")
+        audit.write("tool", name="money_add_rule", pattern=pattern, account=account)
+        return money.add_rule(pattern, account)
+
+    return [money_summary, money_import, money_unknown, money_add_rule]
+#+end_src
+
+** Money tests
+
+The tests use made-up files. No real data is in the repository.
+
+#+begin_src python :tangle ../pkgs/luna-core/tests/test_money.py
+import subprocess
+from datetime import date
+from decimal import Decimal
+
+import pytest
+
+from luna_core.audit import AuditLog
+from luna_core.memory import Memory
+from luna_core.money import Money
+from luna_core.money_plan import load_plan
+from luna_core.money_rules import RuleError, add_rule
+
+RULES = "\n".join([
+    "#+TITLE: Categories",
+    "* Rules",
+    "| Pattern | Account |",
+    "|---------+---------|",
+    "| woolworths | expenses:food:groceries |",
+    "| transfer to | assets:transfers |",
+    "| transfer from | assets:transfers |",
+    "| afterpay | liabilities:afterpay |",
+    "",
+])
+
+PLAN = "\n".join([
+    "* Income",
+    "| Source | Net per pay (AUD) | Pays per year | Net per year |",
+    "| FIFO | 3,000.00 | 26 | |",
+    "* Annual costs",
+    "| Category | Item | Per year (AUD) | Due | Bucket |",
+    "| Phone | Plan | 600 | Monthly | Bills |",
+    "| Housing | Stays | 15,000 | Each swing | Bills |",
+    "* Targets",
+    "| Target | Per year (AUD) |",
+    "| Buffer | 6,000 |",
+    "| Invest | 10,000 |",
+    "",
+])
+
+FILES = {
+    "commbank--personal.csv": "\n".join([
+        '20/11/2026,"-12.34","WOOLWORTHS 1234 PERTH Card xx4111 1111 1111 1111","+100.00"',
+        '21/11/2026,"-500.00","Transfer to xx062000 12345678","-400.00"',
+        '21/11/2026,"-9.99","NETFLIX","-409.99"',
+    ]),
+    "bendigo--savings.csv": '22/11/2026,"500.00","Transfer from CBA 12345678"\n',
+    "up--spending.csv": "\n".join([
+        "Time,Payee,Description,Total (AUD)",
+        "2026-11-22T09:15:00+08:00,Afterpay,Repayment,-50.00",
+    ]),
+    "coopnz--everyday.csv": "Date,Details,Amount\n19/11/2026,Countdown,-20.50\n",
+    "wise--main.csv": "\n".join([
+        "TransferWise ID,Date,Amount,Currency,Description,Payee Name,Merchant",
+        "TRANSFER-123456789,18-11-2026,-30.00,USD,Card transaction,,GitHub",
+    ]),
+}
+
+
+@pytest.fixture
+def money(tmp_path, monkeypatch):
+    for name in ("GIT_AUTHOR_NAME", "GIT_COMMITTER_NAME"):
+        monkeypatch.setenv(name, "test")
+    for name in ("GIT_AUTHOR_EMAIL", "GIT_COMMITTER_EMAIL"):
+        monkeypatch.setenv(name, "test@example.com")
+    root = tmp_path / "memory"
+    (root / "money" / "tx").mkdir(parents=True)
+    (root / "money" / "main.journal").write_text("include accounts.journal\ninclude tx/*.journal\n")
+    (root / "money" / "accounts.journal").write_text("account assets  ; type: A\n")
+    (root / "money" / "tx" / "opening.journal").write_text("; Opening balances.\n")
+    (root / "money" / "categories.org").write_text(RULES)
+    (root / "money.org").write_text(PLAN)
+    subprocess.run(["git", "init", "--quiet", str(root)], check=True)
+    subprocess.run(["git", "-C", str(root), "add", "-A"], check=True)
+    subprocess.run(["git", "-C", str(root), "commit", "--quiet", "-m", "seed"], check=True)
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    memory = Memory(root, AuditLog(tmp_path / "audit.jsonl"), remote=False)
+    return Money(memory, inbox, AuditLog(tmp_path / "audit.jsonl"), lambda: date(2026, 11, 23))
+
+
+def upload(money, names):
+    for name in names:
+        (money.inbox / name).write_text(FILES[name])
+
+
+def journal(money):
+    return (money.root / "tx" / "2026.journal").read_text()
+
+
+def test_import_all_profiles(money):
+    upload(money, FILES)
+    report = money.import_inbox()
+    assert "Kept" not in report, report
+    text = journal(money)
+    assert "expenses:food:groceries  AUD 12.34" in text
+    assert "assets:bank:commbank:personal  AUD -12.34" in text
+    assert "liabilities:afterpay  AUD 50.00" in text
+    assert "assets:bank:coopnz:everyday  NZD -20.50" in text
+    assert "assets:bank:wise:main  USD -30.00" in text
+    assert list(money.inbox.iterdir()) == []
+
+
+def test_import_masks_numbers(money):
+    upload(money, ["commbank--personal.csv"])
+    money.import_inbox()
+    text = journal(money)
+    assert "4111 1111" not in text and "12345678" not in text
+    assert "************1111" in text
+
+
+def test_second_import_adds_nothing(money):
+    upload(money, ["commbank--personal.csv"])
+    money.import_inbox()
+    first = journal(money)
+    upload(money, ["commbank--personal.csv"])
+    report = money.import_inbox()
+    assert "0 new, 3 already imported" in report
+    assert journal(money) == first
+
+
+def test_import_commits_and_never_commits_csv(money):
+    upload(money, ["up--spending.csv"])
+    money.import_inbox()
+    files = subprocess.run(["git", "-C", str(money.memory.root), "ls-files"],
+                           capture_output=True, text=True).stdout
+    assert "money/tx/2026.journal" in files
+    assert ".csv" not in files
+
+
+def test_wrong_header_keeps_the_file(money):
+    (money.inbox / "up--spending.csv").write_text("Date,Thing,Value\n2026-11-22,x,1\n")
+    report = money.import_inbox()
+    assert "Kept up--spending.csv" in report and "Send LUNA the header row" in report
+    assert (money.inbox / "up--spending.csv").exists()
+
+
+def test_wrong_column_count_keeps_the_file(money):
+    (money.inbox / "commbank--personal.csv").write_text("20/11/2026,-1.00,X\n")
+    assert "expects 4" in money.import_inbox()
+
+
+def test_bad_file_name_is_refused(money):
+    (money.inbox / "statement.csv").write_text("x\n")
+    assert "<profile>--<account>.csv" in money.import_inbox()
+
+
+def test_transfers_cancel(money):
+    upload(money, ["commbank--personal.csv", "bendigo--savings.csv"])
+    money.import_inbox()
+    assert "assets:transfers" not in money.summary()
+
+
+def test_summary(money):
+    upload(money, FILES)
+    money.import_inbox()
+    text = money.summary()
+    assert "assets:bank:commbank:personal | AUD -522.33" in text
+    # 3000 * 26 = 78000; minus 15600 costs, 6000 buffer, 10000 invest; / 52
+    assert "Safe to spend per week: AUD 892.31" in text
+    assert "no category" in text
+
+
+def test_unknown_lists_masked_transactions(money):
+    upload(money, ["commbank--personal.csv"])
+    money.import_inbox()
+    text = money.unknown()
+    assert "NETFLIX" in text and "WOOLWORTHS" not in text
+
+
+def test_plan_reports_missing_income(tmp_path):
+    path = tmp_path / "money.org"
+    path.write_text("* Income\n| Source | Net per pay (AUD) | Pays per year | Net per year |\n| FIFO | | | |\n")
+    plan = load_plan(path)
+    assert plan.spend_per_week is None and plan.missing
+
+
+
+@pytest.mark.parametrize("pattern, account", [("a|b", "expenses:x"), ("(", "expenses:x"), ("ok", "Expenses")])
+def test_bad_rules_are_refused(tmp_path, pattern, account):
+    path = tmp_path / "categories.org"
+    path.write_text(RULES)
+    with pytest.raises(RuleError):
+        add_rule(path, pattern, account)
+
+
+def test_old_main_journal_is_refused(money):
+    money.main.write_text("~ every 4 weeks  pay\n    assets:income  AUD 0\n    income:fifo\n")
+    upload(money, ["commbank--personal.csv"])
+    assert "include tx/*.journal" in money.import_inbox()
+    assert (money.inbox / "commbank--personal.csv").exists()
+
+
+def test_add_rule_applies_to_next_import(money):
+    assert "Added" in money.add_rule("netflix", "expenses:subscriptions")
+    upload(money, ["commbank--personal.csv"])
+    money.import_inbox()
+    assert "expenses:subscriptions  AUD 9.99" in journal(money)
+#+end_src
+
 * Memory seed files
 
 LUNA copies these files to the memory on the first start.
@@ -2368,7 +3376,7 @@ Git records each change.
 |---------------+---------------------------------------------|
 | roster.org    | The FIFO swing dates for 12 months          |
 | money.org     | Annual costs, buckets and the spend plan    |
-| money/        | The hledger ledger                          |
+| money/        | The hledger ledger and the category rules   |
 | travel.org    | Off-swing preferences and plans             |
 | projects.org  | The project portfolio and scores            |
 | inventory.org | Hardware parts                              |
@@ -2416,7 +3424,14 @@ One row for each cost. LUNA finds costs in the bank exports that are not here.
 | Invest |         | All surplus after the buffer        |
 
 ,* Safe to spend
-spend per week = (net per year − annual costs − buffer per year − invest target) / 52
+spend per week = (net per year − annual costs − buffer per year − invest per year) / 52
+LUNA calculates the number from the Income, Annual costs and Targets tables.
+
+,* Targets
+| Target | Per year (AUD) |
+|--------+----------------|
+| Buffer |                |
+| Invest |                |
 
 ,* Investment plan
 Write the plan here before LUNA gives rebalance alerts.
@@ -2429,17 +3444,52 @@ Write the plan here before LUNA gives rebalance alerts.
 #+end_src
 
 #+begin_src ledger :tangle memory-seed/money/main.journal
-; LUNA money ledger in hledger format. Amounts in AUD.
-; Run: hledger -f money/main.journal forecast
-; Replace the 0 amounts with real amounts.
+; LUNA money ledger, in hledger format. Amounts carry a currency code.
+; LUNA writes tx/<year>.journal. Do not edit those files by hand.
+; Edit accounts.journal, tx/opening.journal and categories.org.
+; Run: hledger -f money/main.journal balance
+include accounts.journal
+include tx/*.journal
+#+end_src
 
-~ every 4 weeks from 2026-12-01  pay
-    assets:income      AUD 0
-    income:fifo
+#+begin_src ledger :tangle memory-seed/money/accounts.journal
+; The accounts. The type tag tells hledger the kind of account.
+account assets                ; type: A
+account assets:bank           ; type: C
+account assets:transfers      ; type: A
+account liabilities           ; type: L
+account liabilities:afterpay  ; type: L
+account income                ; type: R
+account income:unknown        ; type: R
+account expenses              ; type: X
+account expenses:unknown      ; type: X
+account equity                ; type: E
+account equity:opening        ; type: E
+#+end_src
 
-~ yearly from 2027-01-01  insurance
-    expenses:insurance  AUD 0
-    assets:bills
+#+begin_src ledger :tangle memory-seed/money/tx/opening.journal
+; Opening balances. Write one entry for each balance that has no bank export.
+; Example (Afterpay owes money, so the liability is negative):
+;
+; 2026-12-01 Opening balance Afterpay
+;     liabilities:afterpay   AUD -0.00
+;     equity:opening
+#+end_src
+
+#+begin_src org :tangle memory-seed/money/categories.org
+,#+TITLE: Categories
+
+Each rule is a pattern and an account. The match ignores case.
+The first rule that matches a description wins.
+A pattern cannot contain "|". Write two rules instead.
+LUNA adds rules here when you agree to a suggestion.
+
+,* Rules
+| Pattern       | Account              |
+|---------------+----------------------|
+| transfer to   | assets:transfers     |
+| transfer from | assets:transfers     |
+| afterpay      | liabilities:afterpay |
 #+end_src
 
 #+begin_src org :tangle memory-seed/travel.org

@@ -10,6 +10,7 @@ from .agent import Agent
 from .audit import AuditLog
 from .matrix_bot import Bot
 from .memory import Memory, MemoryAccessError
+from .money import Money
 from .sysinfo import update_notice
 
 BRIEF_PROMPT = """\
@@ -31,7 +32,9 @@ def next_run(now: datetime, at: time) -> datetime:
     return candidate
 
 
-async def brief_loop(make_agent: Callable[[], Agent], bot: Bot, audit: AuditLog, at: time) -> None:
+async def brief_loop(
+    make_agent: Callable[[], Agent], bot: Bot, audit: AuditLog, at: time, money: Money | None = None
+) -> None:
     while True:
         agent = make_agent()
         now = agent.now()
@@ -41,6 +44,9 @@ async def brief_loop(make_agent: Callable[[], Agent], bot: Bot, audit: AuditLog,
             notice = update_notice(agent.now().date())
             if notice is not None:
                 text = f"{notice}\n\n{text}"
+            # The Monday money post. Code makes the numbers, not the model.
+            if money is not None and agent.now().weekday() == 0:
+                text = f"{text}\n\n{money.summary()}"
             await bot.send_owner(text)
             audit.write("brief.sent")
         except Exception as error:  # noqa: BLE001 - the loop must not stop

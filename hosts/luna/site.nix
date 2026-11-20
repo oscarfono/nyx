@@ -23,4 +23,8 @@
 
   # Set to true to send nudges to Telegram. Nudges contain no personal data.
   telegram = false;
+
+  # CAUTION: keep false until the gate test in "The gate for phase 2" passes.
+  # true gives the agent the money tools and starts the Monday money post.
+  money = false;
 }

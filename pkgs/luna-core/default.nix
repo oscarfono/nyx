@@ -1,4 +1,4 @@
-{ lib, python3Packages, git }:
+{ lib, python3Packages, git, hledger }:
 
 python3Packages.buildPythonApplication {
   pname = "luna-core";
@@ -18,7 +18,7 @@ python3Packages.buildPythonApplication {
     tzdata
   ];
 
-  nativeCheckInputs = [ python3Packages.pytestCheckHook git ];
+  nativeCheckInputs = [ python3Packages.pytestCheckHook git hledger ];
 
   meta = {
     description = "The core agent of LUNA";
