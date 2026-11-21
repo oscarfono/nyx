@@ -34,6 +34,14 @@
     ./local.nix
   ];
 
+  # The project brains. Each brain is brain/ in the repository of the project.
+  # The LUNA module links each one into ~/org/brains (the org-roam directory)
+  # and copies it to the memory hub, so LUNA reads it. Refer to "Project
+  # brains" in LUNA.org.
+  luna.brains = {
+    ghoul = "Projects/Ghoul/brain";
+  };
+
   home.username = username;
   home.homeDirectory = "/home/${username}";
   home.stateVersion = "26.05";

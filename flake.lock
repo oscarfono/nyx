@@ -248,11 +248,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1795238573,
-        "narHash": "sha256-v0+SVd6n5Nhb2x/c7ctr0JlQRQm+lbr2+M8sweiQvo0=",
+        "lastModified": 1795260181,
+        "narHash": "sha256-dQCPdbzj07BDNkYBUJ16VyJ/kSF5RPgQbBceRCk3tRs=",
         "ref": "master",
-        "rev": "b08fb978912dc69b370e65ce2a17becdb50c6c81",
-        "revCount": 30,
+        "rev": "d094f69c869fcd794ba8d7d59ff150bab5e97efe",
+        "revCount": 39,
         "type": "git",
         "url": "ssh://git@github.com/oscarfono/luna.git"
       },
