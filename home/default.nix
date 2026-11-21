@@ -40,6 +40,7 @@
   # brains" in LUNA.org.
   luna.brains = {
     ghoul = "Projects/Ghoul/brain";
+    adp = "Projects/adp/brain";
   };
 
   home.username = username;
