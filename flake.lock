@@ -240,28 +240,19 @@
         "home-manager": [
           "home-manager"
         ],
-        "lanzaboote": [
-          "lanzaboote"
-        ],
-        "nix-index-database": [
-          "nix-index-database"
-        ],
         "nixpkgs": [
           "nixpkgs"
-        ],
-        "rust-overlay": [
-          "rust-overlay"
         ],
         "sops-nix": [
           "sops-nix"
         ]
       },
       "locked": {
-        "lastModified": 1795208109,
-        "narHash": "sha256-hhr3bO5/IMD/S46bkTJJOA4QESOg94Dqtj1dvhTpu3E=",
+        "lastModified": 1795238573,
+        "narHash": "sha256-v0+SVd6n5Nhb2x/c7ctr0JlQRQm+lbr2+M8sweiQvo0=",
         "ref": "master",
-        "rev": "7a1e929acfd7d4260aaa0e29bab274dc53d5c875",
-        "revCount": 25,
+        "rev": "b08fb978912dc69b370e65ce2a17becdb50c6c81",
+        "revCount": 30,
         "type": "git",
         "url": "ssh://git@github.com/oscarfono/luna.git"
       },

@@ -87,16 +87,12 @@
     # GitHub token. The lock holds the revision and the hash.
     #
     # The follows lines stop a second copy of each input in the lock.
-    # When the LUNA flake drops lanzaboote and nix-index-database, delete
-    # the two follows lines for them. beta keeps its own lanzaboote.
+    # LUNA has no lanzaboote input: beta keeps its own lanzaboote (above).
     luna = {
       url = "git+ssh://git@github.com/oscarfono/luna.git?ref=master";
       inputs.nixpkgs.follows = "nixpkgs";
       inputs.home-manager.follows = "home-manager";
       inputs.sops-nix.follows = "sops-nix";
-      inputs.nix-index-database.follows = "nix-index-database";
-      inputs.lanzaboote.follows = "lanzaboote";
-      inputs.rust-overlay.follows = "rust-overlay";
     };
     };
 
